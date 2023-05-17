@@ -1,2 +1,4 @@
+black==23.3.0
+ipywidgets
 torch --index-url https://download.pytorch.org/whl/cpu
 transformers
