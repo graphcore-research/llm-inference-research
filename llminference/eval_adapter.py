@@ -9,6 +9,8 @@ from torch import Tensor
 class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
     """A simplified adapter for lm_eval <-> HuggingFace."""
 
+    DEFAULT_BATCH_SIZE = 32
+
     def __init__(
         self,
         model: transformers.PreTrainedModel,
@@ -22,14 +24,23 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
 
     @classmethod
     def from_pretrained(
-        cls, pretrained_model_name_or_path: str, batch_size: int = 32
+        cls, pretrained_model_name_or_path: str, batch_size: int = DEFAULT_BATCH_SIZE
     ) -> "Adapter":
-        return cls(
-            model=transformers.AutoModelForCausalLM.from_pretrained(
+        return cls.from_model(
+            transformers.AutoModelForCausalLM.from_pretrained(
                 pretrained_model_name_or_path
             ),
+            batch_size=batch_size,
+        )
+
+    @classmethod
+    def from_model(
+        cls, model: transformers.PreTrainedModel, batch_size: int = DEFAULT_BATCH_SIZE
+    ) -> "Adapter":
+        return cls(
+            model=model,
             tokenizer=transformers.AutoTokenizer.from_pretrained(
-                pretrained_model_name_or_path
+                model.config._name_or_path
             ),
             batch_size=batch_size,
         )
