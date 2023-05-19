@@ -1,5 +1,6 @@
 .coverage
 __pycache__
+slurm-*.out
 .venv
 .vscode
 
