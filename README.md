@@ -2,6 +2,8 @@
 
 ## Setup
 
+See [notebooks:Eval.ipynb](https://github.com/PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference/blob/notebooks/Eval.ipynb) for usage.
+
 ```bash
 python3 -m venv .venv
 # Append to .venv/bin/activate:

@@ -8,7 +8,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 
 import datasets
 import torch
@@ -48,12 +48,12 @@ class Dataset:
         ]
         return cls(**d)
 
-    def save(self, path: Path) -> None:
-        path.write_text(self.to_json())
+    def save(self, path: Union[str, Path]) -> None:
+        Path(path).write_text(self.to_json())
 
     @classmethod
-    def load(cls, path: Path) -> "Dataset":
-        return cls.from_json(path.read_text())
+    def load(cls, path: Union[str, Path]) -> "Dataset":
+        return cls.from_json(Path(path).read_text())
 
 
 def _get_prompts(
