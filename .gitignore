@@ -1,7 +1,9 @@
+.coverage
 __pycache__
 .venv
 .vscode
 
+/data
 /local
 /notebooks
 /third_party/lm-evaluation-harness/

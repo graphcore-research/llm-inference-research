@@ -1,0 +1,125 @@
+#!/usr/bin/env python
+
+"""Dev task launcher."""
+
+import argparse
+import os
+import subprocess
+import sys
+from typing import Any, Callable, Iterable, List, Optional, TypeVar
+
+# Utilities
+
+
+def run(command: Iterable[Any]) -> None:
+    """Run a command, terminating on failure."""
+    cmd = [str(arg) for arg in command if arg is not None]
+    print("$ " + " ".join(cmd), file=sys.stderr)
+    environ = os.environ.copy()
+    environ["PYTHONPATH"] = f"{os.getcwd()}:{environ.get('PYTHONPATH', '')}"
+    exit_code = subprocess.call(cmd, env=environ)
+    if exit_code:
+        sys.exit(exit_code)
+
+
+T = TypeVar("T")
+
+
+def cli(*args: Any, **kwargs: Any) -> Callable[[T], T]:
+    """Declare a CLI command / arguments for that command."""
+
+    def wrap(func: T) -> T:
+        if not hasattr(func, "cli_args"):
+            setattr(func, "cli_args", [])
+        if args or kwargs:
+            getattr(func, "cli_args").append((args, kwargs))
+        return func
+
+    return wrap
+
+
+# Commands
+
+PYTHON_ROOTS = ["llminference", "scripts", "dev"]
+
+
+@cli("-k", "--filter")
+@cli("-s", "--nocapture", action="store_true")
+def tests(filter: Optional[str], nocapture: bool) -> None:
+    """run Python tests"""
+    run(
+        [
+            "python",
+            "-m",
+            "pytest",
+            "llminference",
+            None if filter else "--cov=llminference",
+            *(["-k", filter] if filter else []),
+            "--capture=no" if nocapture else None,
+        ]
+    )
+
+
+@cli("command", nargs="*")
+def python(command: List[Any]) -> None:
+    """run Python with the current directory on PYTHONPATH, for development"""
+    run(["python"] + command)
+
+
+@cli()
+def lint() -> None:
+    """run static analysis"""
+    run(["python", "-m", "flake8", *PYTHON_ROOTS])
+    run(["python", "-m", "mypy", *PYTHON_ROOTS])
+
+
+@cli("--check", action="store_true")
+def format(check: bool) -> None:
+    """autoformat all sources"""
+    run(["python", "-m", "black", "--check" if check else None, *PYTHON_ROOTS])
+    run(["python", "-m", "isort", "--check" if check else None, *PYTHON_ROOTS])
+
+
+@cli(
+    "-s",
+    "--skip",
+    nargs="*",
+    default=[],
+    choices=["tests", "lint", "format"],
+    help="commands to skip",
+)
+def ci(skip: List[str]) -> None:
+    """run all continuous integration tests & checks"""
+    if "tests" not in skip:
+        tests(filter=None, nocapture=False)
+    if "lint" not in skip:
+        lint()
+    if "format" not in skip:
+        format(check=True)
+
+
+# Script
+
+
+def _main() -> None:
+    # Build an argparse command line by finding globals in the current module
+    # that are marked via the @cli() decorator. Each one becomes a subcommand
+    # running that function, usage "$ ./dev fn_name ...args".
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.set_defaults(_action=lambda: ci(skip=[]))
+
+    subs = parser.add_subparsers()
+    for key, value in globals().items():
+        if hasattr(value, "cli_args"):
+            sub = subs.add_parser(key.replace("_", "-"), help=value.__doc__)
+            for args, kwargs in value.cli_args:
+                sub.add_argument(*args, **kwargs)
+            sub.set_defaults(_action=value)
+
+    cli_args = vars(parser.parse_args())
+    _action = cli_args.pop("_action")
+    _action(**cli_args)
+
+
+if __name__ == "__main__":
+    _main()

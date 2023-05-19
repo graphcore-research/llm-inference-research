@@ -1,11 +1,14 @@
-from typing import Iterable, List
+from typing import Iterable, List, cast
 
 import lm_eval.base
 import torch
 import transformers
+from torch import Tensor
 
 
-class Adapter(lm_eval.base.BaseLM):
+class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
+    """A simplified adapter for lm_eval <-> HuggingFace."""
+
     def __init__(
         self,
         model: transformers.PreTrainedModel,
@@ -19,7 +22,7 @@ class Adapter(lm_eval.base.BaseLM):
 
     @classmethod
     def from_pretrained(
-        cls, pretrained_model_name_or_path: str, batch_size: int = 16
+        cls, pretrained_model_name_or_path: str, batch_size: int = 32
     ) -> "Adapter":
         return cls(
             model=transformers.AutoModelForCausalLM.from_pretrained(
@@ -35,11 +38,11 @@ class Adapter(lm_eval.base.BaseLM):
 
     @property
     def eot_token_id(self) -> int:
-        return self.tokenizer.eos_token_id
+        return cast(int, self.tokenizer.eos_token_id)
 
     @property
     def max_length(self) -> int:
-        return self.model.config.max_position_embeddings
+        return cast(int, self.model.config.max_position_embeddings)
 
     @property
     def max_gen_toks(self) -> int:
@@ -51,21 +54,23 @@ class Adapter(lm_eval.base.BaseLM):
 
     @property
     def device(self) -> torch.device:
-        return self.model.device
+        return cast(torch.device, self.model.device)
 
-    def tok_encode(self, string: str) -> List[str]:
-        return self.tokenizer.encode(string, add_special_tokens=False)
+    def tok_encode(self, string: str) -> List[int]:
+        return cast(List[int], self.tokenizer.encode(string, add_special_tokens=False))
 
     def tok_decode(self, tokens: Iterable[int]) -> str:
-        return self.tokenizer.decode(tokens)
+        return cast(str, self.tokenizer.decode(tokens))
 
-    def _model_call(self, inps: torch.Tensor) -> torch.Tensor:
+    def _model_call(self, inps: Tensor) -> Tensor:
         with torch.no_grad():
-            return self.model(inps).logits
+            logits: Tensor = self.model(inps).logits
+            return logits
 
     def _model_generate(
-        self, context: torch.Tensor, max_length: int, eos_token_id: int
-    ):
-        return self.model.generate(
+        self, context: Tensor, max_length: int, eos_token_id: int
+    ) -> Tensor:
+        generation: Tensor = self.model.generate(
             context, max_length=max_length, eos_token_id=eos_token_id, do_sample=False
         )
+        return generation
