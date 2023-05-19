@@ -1,3 +1,19 @@
+diff --git a/lm_eval/metrics.py b/lm_eval/metrics.py
+index 8f30a426959d0adb4a2a298e259995758c4cd819..6f55762098f385eb284dd41a8011a4037ee9b789 100644
+--- a/lm_eval/metrics.py
++++ b/lm_eval/metrics.py
+@@ -205,9 +205,9 @@ class _bootstrap_internal:
+ 
+ 
+ def bootstrap_stderr(f, xs, iters):
+-    import multiprocessing as mp
++    from multiprocessing.pool import ThreadPool
+ 
+-    pool = mp.Pool(mp.cpu_count())
++    pool = ThreadPool(1)
+     # this gives a biased estimate of the stderr (i.e w/ the mean, it gives something
+     # equivalent to stderr calculated without Bessel's correction in the stddev.
+     # Unfortunately, I haven't been able to figure out what the right correction is
 diff --git a/lm_eval/tasks/bigbench.py b/lm_eval/tasks/bigbench.py
 index 0d1a7daffb109a1a6b739f0607dea3180c984673..39e66c2699d902d689ee9859cab9747e7007fbc9 100644
 --- a/lm_eval/tasks/bigbench.py
