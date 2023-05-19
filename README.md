@@ -18,6 +18,9 @@ git -C third_party/lm-evaluation-harness reset --hard d145167
 git -C third_party/lm-evaluation-harness apply ../lm-evaluation-harness.patch
 pip install -e third_party/lm-evaluation-harness/
 
+# Optional - reference data for `llminference.outcompare`
+git clone git@github.com:PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference.git --branch data data/
+
 # Optional - notebooks
 git clone git@github.com:PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference.git --branch notebooks notebooks/
 ```
