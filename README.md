@@ -11,6 +11,7 @@ python3 -m venv .venv
     export TOKENIZERS_PARALLELISM=true
 
 source .venv/bin/activate
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 
 # Patch & install Eleuther's LM harness

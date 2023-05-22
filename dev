@@ -40,7 +40,7 @@ def cli(*args: Any, **kwargs: Any) -> Callable[[T], T]:
 
 # Commands
 
-PYTHON_ROOTS = ["llminference", "scripts", "dev"]
+PYTHON_ROOTS = ["llminference", "scripts", "dev", "setup.py"]
 
 
 @cli("-k", "--filter")

@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+SCRIPT=$1
+
+VENV="/tmp/venv-${SLURM_JOB_ID:-$(date --iso-8601=seconds)}"
+
+set -e
+trap "rm -rf ${VENV}" EXIT
+
+python -m venv "${VENV}"
+echo "export TOKENIZERS_PARALLELISM=true" >> "${VENV}/bin/activate"
+source "${VENV}/bin/activate"
+pip install wheel
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install -e third_party/lm-evaluation-harness
+pip install .
+
+echo -e "\n\nRUNNING ${SCRIPT}"
+python "${SCRIPT}"

@@ -1,5 +1,5 @@
---index-url https://download.pytorch.org/whl/cpu
 black==23.3.0
+einops
 flake8==6.0.0
 ipywidgets
 isort
@@ -11,4 +11,5 @@ tqdm
 torch
 torchaudio
 transformers
+types-setuptools
 types-tqdm
