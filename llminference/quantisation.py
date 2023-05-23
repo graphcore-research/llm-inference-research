@@ -27,6 +27,7 @@ class Format(TensorFormat):
 
     exponent_bits: int
     mantissa_bits: int
+    _type: str = "scalar"
 
     @property
     def max_absolute_value(self) -> float:
@@ -121,12 +122,17 @@ class IntFormat(Format):
 
 @dataclass
 class ExpCeilFormat(Format):
+    _type: str = "exp"
+
     def __post_init__(self) -> None:
         assert self.mantissa_bits == 0, "ExpCeilFormat has no exponent bits"
 
     @property
     def bits(self) -> int:
         return self.exponent_bits  # override to remove sign bit
+
+    def __str__(self) -> str:
+        return f"EXP{self.exponent_bits}"
 
     @property
     def exponent_bias(self) -> float:
@@ -183,6 +189,15 @@ class LinearScalingFormat(TensorFormat):
     element_format: Format
     group_shapes: Sequence[GroupShape]
     scale_format: TensorFormat
+
+    _type: str = "linear"
+
+    def __str__(self) -> str:
+        group = ":".join(
+            ".".join("*" if g is None else str(g) for g in group_shape)
+            for group_shape in self.group_shapes
+        )
+        return f"{self.element_format}{{{group}:{self.scale_format}}}"
 
     @staticmethod
     def _group_shape_for(tensor_shape: Shape, group_shape: GroupShape) -> Shape:
@@ -269,9 +284,12 @@ def group_scaling_format(
     )
 
 
+ModelFormats = Sequence[Tuple[str, TensorFormat]]
+
+
 def quantise_model(
     model: nn.Module,
-    formats: Sequence[Tuple[str, TensorFormat]] = [],
+    formats: ModelFormats = [],
     vector_format: TensorFormat = FP16,
 ) -> float:
     """In-place quantise a model, returning the size of the quantised model (bytes).
