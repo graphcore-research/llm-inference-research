@@ -80,7 +80,9 @@ def run_multiprocess_sweep(
                     kwds=dict(task=task, task_args=s, n_threads=n_threads),
                 )
                 for s in settings
-            ]
+            ],
+            ncols=120,
+            miniters=1,
         )
         for n, result in enumerate(results):
             out = result.get()
