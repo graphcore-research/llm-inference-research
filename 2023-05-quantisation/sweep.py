@@ -1,18 +1,14 @@
-"""Run a quantisation settings sweep over a range of settings."""
+"""Run a quantisation settings sweep over a range of settings.
 
-import json
-import os
-import sys
+Incompatible with commit `03342c46`.
+"""
+
 import time
-import unittest.mock as um
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, cast
+from typing import Any, Dict, Iterable, Optional
 
 import lm_eval.evaluator
-import torch
-import tqdm
 import transformers
-from torch import multiprocessing
 
 import llminference as L
 
@@ -23,12 +19,11 @@ def lm_eval_evaluate(
     batch_size = min(
         limit or L.Adapter.DEFAULT_BATCH_SIZE, L.Adapter.DEFAULT_BATCH_SIZE
     )
-    with um.patch("tqdm.tqdm", lambda it, *_, **__: it):
-        out = lm_eval.evaluator.evaluate(
-            L.Adapter.from_model(model, batch_size=batch_size),
-            lm_eval.tasks.get_task_dict([task]),
-            limit=limit,
-        )
+    out = lm_eval.evaluator.evaluate(
+        L.Adapter.from_model(model, batch_size=batch_size),
+        lm_eval.tasks.get_task_dict([task]),
+        limit=limit,
+    )
     return {
         f"{task}:{metric}": value
         for task, d in out["results"].items()
@@ -90,11 +85,10 @@ if __name__ == "__main__":
 
     def models() -> Iterable[str]:
         # yield from ["pythia-70m", "pythia-160m"]  # Test
-        # yield from (
-        #     f"pythia-{s}" for s in ["70m", "160m", "410m", "1b", "1.4b", "2.8b", "6.9b"]
-        # )
-        # yield from (f"opt-{s}" for s in ["125m", "1.3b", "2.7b", "6.7b"])
-        yield "mpt-7b"
+        yield from (
+            f"pythia-{s}" for s in ["70m", "160m", "410m", "1b", "1.4b", "2.8b", "6.9b"]
+        )
+        yield from (f"opt-{s}" for s in ["125m", "1.3b", "2.7b", "6.7b"])
 
     # tasks = dict(outcompare=3)  # Test
     tasks = dict(outcompare=300, lambada_openai=None, arc_easy=None)
