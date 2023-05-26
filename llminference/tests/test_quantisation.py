@@ -1,3 +1,5 @@
+import dataclasses
+import json
 from typing import cast
 
 import torch
@@ -45,6 +47,38 @@ def test_ieee_fp16() -> None:
     )
 
 
+def test_lut_format() -> None:
+    fmt = quantisation.LUTFormat((-1, -0.125, 0.125, 1), "fours")
+    assert str(fmt) == "LUT2[fours]"
+    assert fmt.bits == 2
+    assert fmt.max_absolute_value == 1
+    assert torch.equal(
+        fmt.quantise(torch.tensor([0.8, 0.6, -0.001, -1.2])),
+        torch.tensor([1, 1, -0.125, -1]),
+    )
+
+
+def test_scalar_formats() -> None:
+    for fmt in [
+        quantisation.FP16,
+        quantisation.FP32,
+        quantisation.NF4,
+        quantisation.nf_approx(5),
+        quantisation.parse("E0M3"),
+        quantisation.parse("E2M2"),
+    ]:
+        assert 0 < fmt.max_absolute_value
+        assert 1 <= fmt.bits <= 32
+        assert 600 <= fmt.count_bits((20, 30))
+
+        x = torch.linspace(-20, 20, steps=100).view(2, 1, 50)
+        qx = fmt.quantise(x)
+        assert qx.shape == x.shape
+        assert torch.all(qx <= fmt.max_absolute_value)
+
+        assert json.loads(json.dumps(dataclasses.asdict(fmt)))
+
+
 def test_linear_scaling_format() -> None:
     torch.manual_seed(23875)
     tensor = torch.randn((10, 20))
@@ -72,7 +106,8 @@ def test_linear_scaling_format() -> None:
     # 4. Others
     for format_ in [
         quantisation.channel_scaling_format(e3m4, per="output"),
-        quantisation.channel_scaling_format(e3m4, per="inout"),
+        quantisation.channel_scaling_format(e3m4, per="inout-prod"),
+        quantisation.channel_scaling_format(e3m4, per="inout-min"),
         quantisation.channel_scaling_format(
             e3m4, per="input", scale_format=quantisation.tensor_scaling_format(e3m4)
         ),
