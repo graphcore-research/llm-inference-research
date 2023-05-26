@@ -2,6 +2,7 @@
 
 import datetime
 import json
+import multiprocessing
 import os
 import sys
 import time
@@ -11,7 +12,6 @@ from typing import Any, Callable, Dict, Iterable, List, TypeVar, cast
 
 import torch
 import tqdm
-from torch import multiprocessing
 
 T = TypeVar("T")
 
@@ -44,7 +44,7 @@ def _sweep_runner(
         return result
     except Exception as error:
         return dict(
-            _args=task_args,
+            _args={k: str(v) for k, v in task_args.items()},
             _error=repr(error),
             _error_tb=traceback.format_exception(
                 type(error), error, error.__traceback__

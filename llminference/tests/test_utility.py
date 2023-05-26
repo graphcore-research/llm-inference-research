@@ -27,7 +27,7 @@ def test_multiprocess_sweep(tmp_path: Path) -> None:
     )
     (bad_result,) = (r for r in results if "_error" in r)
     assert "High five!" in bad_result["_error"]
-    assert bad_result["_args"]["value"] == 5
+    assert bad_result["_args"]["value"] == "5"
     assert {r["result"] for r in results if "_error" not in r} == {
         10 * i for i in range(9) if i != 5
     }
