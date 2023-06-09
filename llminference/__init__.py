@@ -1,2 +1,8 @@
-from . import eval_adapter, outcompare, quantisation, utility  # noqa: F401
+from . import (  # noqa: F401
+    eval_adapter,
+    outcompare,
+    quantisation,
+    utility,
+    sparse_attention,
+)
 from .eval_adapter import Adapter  # noqa:F401
