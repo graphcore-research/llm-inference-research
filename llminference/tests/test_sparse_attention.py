@@ -1,6 +1,7 @@
-from .. import sparse_attention as sa
 import torch
 import torch.nn.functional as F
+
+from .. import sparse_attention as sa
 
 
 def test_sparse_softmax_fixed_k() -> None:

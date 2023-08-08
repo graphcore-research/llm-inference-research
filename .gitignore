@@ -4,6 +4,7 @@ slurm-*.out
 .venv
 .vscode
 
+/cache
 /data
 /local
 /notebooks
