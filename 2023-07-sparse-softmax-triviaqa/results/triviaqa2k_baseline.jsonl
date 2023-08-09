@@ -1,0 +1,6 @@
+{"model": "pythia-70m", "closed_book_acc": 0.0022471910112359553, "open_book_acc": 0.020224719101123594}
+{"model": "pythia-160m", "closed_book_acc": 0.0022471910112359553, "open_book_acc": 0.033707865168539325}
+{"model": "pythia-410m", "closed_book_acc": 0.017977528089887642, "open_book_acc": 0.20449438202247192}
+{"model": "pythia-1b", "closed_book_acc": 0.024719101123595506, "open_book_acc": 0.3258426966292135}
+{"model": "pythia-1.4b", "closed_book_acc": 0.0449438202247191, "open_book_acc": 0.2898876404494382}
+{"model": "pythia-2.8b", "closed_book_acc": 0.04269662921348315, "open_book_acc": 0.4134831460674157}
