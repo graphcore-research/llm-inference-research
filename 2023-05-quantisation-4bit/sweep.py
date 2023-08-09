@@ -53,7 +53,7 @@ def evaluate(
             unembedding_format=dataclasses.asdict(unembedding_format),
         )
     t0 = time.time()
-    summary.update(outcompare_evaluate(model, dataset, limit=100))  # 300
+    summary.update(outcompare_evaluate(model, dataset, limit=300))
     summary[f"outcompare:time"] = time.time() - t0
     return summary
 
@@ -62,9 +62,8 @@ if __name__ == "__main__":
 
     def models() -> Iterable[str]:
         # yield "pythia-70m"  # TEST
-        yield "pythia-410m"
-        # yield "pythia-1.4b"
-        # yield "opt-1.3b"
+        yield "pythia-1.4b"
+        yield "opt-1.3b"
 
     def formats() -> Iterable[Tuple[Q.TensorFormat, Q.TensorFormat]]:
         # FP16 baseline
@@ -104,5 +103,5 @@ if __name__ == "__main__":
         for unembedding_format, format_ in formats()
     ]
     L.utility.run_multiprocess_sweep(
-        evaluate, settings, Path("out/sweep_4bit_quick.jsonl"), n_workers=16
+        evaluate, settings, Path("out/sweep_4bit.jsonl"), n_workers=16
     )
