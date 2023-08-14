@@ -31,18 +31,19 @@ def test_get_cache_str() -> None:
     assert adapter1._get_cache_str(s1) != adapter3._get_cache_str(s1)
 
 
-def test_generate_kv_cache() -> None:
+def test_prefill_with_cache() -> None:
     s = ["How are you", "She was walking down the street"]
     adapter = eval_adapter.Adapter.from_pretrained("EleutherAI/pythia-70m")
     adapter.model.double()
     dir_path = "cache/"
     with um.patch("torch.save") as mock_save:
-        adapter.generate_kv_cache(s, dir_path=dir_path)
+        out = adapter.prefill_with_cache(s, max_context_length=64, dir_path=dir_path)
     assert mock_save.call_count == 2
-    for call_args, ctx in zip(mock_save.call_args_list, s):
+    for i, (call_args, ctx) in enumerate(zip(mock_save.call_args_list, s)):
         args = call_args.args
         inp = adapter.tokenizer(ctx, return_tensors="pt")
         pkv = adapter._kv_to_tensor(adapter.model(**inp).past_key_values)
+        torch.testing.assert_close(out[i], pkv)
         torch.testing.assert_close(args[0], pkv)
         assert args[1] == Path(dir_path, adapter._get_cache_str(ctx) + ".pt")
 
