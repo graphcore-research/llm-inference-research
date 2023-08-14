@@ -195,18 +195,18 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
     def greedy_sample(
         self,
         ctxs: List[str],
-        questions: List[str],
+        prompts: List[str],
         num_generated_tokens: int,
         use_cache: bool = True,
         cache_dir: str = "cache/",
     ) -> Tensor:
         """
-        Sample greedily from the model assuming the prompts are ctx + question,
+        Sample greedily from the model assuming the prompts are ctx + prompt,
         where KV cache for the ctx can be loaded from memory.
 
         Args:
-            ctxs (List[str]): List of context strings prepended to questions
-            questions (List[str]): List of question strings
+            ctxs (List[str]): List of context strings prepended to prompts
+            prompts (List[str]): List of prompt strings
             num_generated_tokens (int): Number of generated tokens
             use_cache (bool, optional): Load ctx KV cache from disk if it exits.
             If not, first generate and save the cache. Defaults to True.
@@ -218,13 +218,13 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         """
         batch_size = len(ctxs)
         assert len(ctxs) == len(
-            questions
-        ), "Number of context and question strings should be the same"
+            prompts
+        ), "Number of context and prompt strings should be the same"
 
         if not use_cache:
             with self.tokenizer_padding("left"):
                 inp = self.tokenizer(
-                    [ctx + question for ctx, question in zip(ctxs, questions)],
+                    [ctx + prompt for ctx, prompt in zip(ctxs, prompts)],
                     return_tensors="pt",
                     padding=True,
                 )
@@ -264,14 +264,12 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                 [[i >= max_len - len for i in range(max_len)] for len in seq_lens]
             ).long()
 
-            # Tokenize questions with left padding (easier generation)
+            # Tokenize prompts with left padding (easier generation)
             with self.tokenizer_padding("left"):
-                questions_enc = self.tokenizer(
-                    questions, return_tensors="pt", padding=True
-                )
+                prompts_enc = self.tokenizer(prompts, return_tensors="pt", padding=True)
 
-            input_ids = questions_enc["input_ids"]
-            attention_mask_right = questions_enc["attention_mask"]
+            input_ids = prompts_enc["input_ids"]
+            attention_mask_right = prompts_enc["attention_mask"]
 
             # Apply correct position ids given padding tokens
             q_len = input_ids.shape[-1]
@@ -285,7 +283,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                 ]
             )
 
-            # Concatanate cache and questions attention masks
+            # Concatanate cache and prompts attention masks
             attention_mask = torch.cat(
                 [attention_mask_left, attention_mask_right], dim=1
             )
@@ -314,11 +312,3 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                     position_ids = position_ids[:, -1:] + 1
 
         return torch.cat(generated_tokens, dim=1)
-
-
-def evaluate_prediction(out: Tensor, targets: List[List[int]]) -> bool:
-    # Assume out is a single sequence
-    assert len(out.shape) == 1
-    return any(
-        torch.equal(out[: len(target)], torch.tensor(target)) for target in targets
-    )

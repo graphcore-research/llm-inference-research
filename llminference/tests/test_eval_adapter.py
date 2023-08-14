@@ -96,12 +96,3 @@ def test_greedy_sample() -> None:
         )
         assert out_cache.shape == (2, 1)
         torch.testing.assert_close(out_cache, out_expected)
-
-
-def test_evaluate_prediction() -> None:
-    targets = [[0, 1], [2, 3, 4], [5]]
-
-    assert eval_adapter.evaluate_prediction(torch.tensor([5]), targets)
-    assert eval_adapter.evaluate_prediction(torch.tensor([2, 3, 4]), targets)
-    assert eval_adapter.evaluate_prediction(torch.tensor([2, 3, 4, 5]), targets)
-    assert not eval_adapter.evaluate_prediction(torch.tensor([1, 2, 3, 4]), targets)

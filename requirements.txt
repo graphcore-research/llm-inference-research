@@ -11,5 +11,6 @@ tqdm
 torch
 torchaudio
 transformers
+types-regex
 types-setuptools
 types-tqdm

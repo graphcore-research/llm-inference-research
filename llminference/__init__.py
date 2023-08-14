@@ -1,5 +1,6 @@
 from . import (  # noqa: F401
     eval_adapter,
+    eval_utils,
     outcompare,
     quantisation,
     sparse_attention,
