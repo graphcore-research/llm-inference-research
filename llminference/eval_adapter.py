@@ -1,4 +1,6 @@
 import hashlib
+import logging
+import struct
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Tuple, cast
@@ -10,6 +12,8 @@ from torch import Tensor
 from torch.nn.functional import pad
 
 KVCache = Tuple[Tuple[Tensor, Tensor], ...]
+
+logger = logging.getLogger(__name__)
 
 
 class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
@@ -96,20 +100,22 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         return generation
 
     @contextmanager
-    def tokenizer_padding(self, padding_side: str) -> Iterator[None]:
+    def tokenizer_override(self, padding: str, truncation: str) -> Iterator[None]:
         try:
-            default_pad_side = self.tokenizer.padding_side
-            self.tokenizer.padding_side = padding_side
+            defaults = self.tokenizer.padding_side, self.tokenizer.truncation_side
+            self.tokenizer.padding_side = padding
+            self.tokenizer.truncation_side = truncation
             yield
         finally:
-            self.tokenizer.padding_side = default_pad_side
+            self.tokenizer.padding_side, self.tokenizer.truncation_side = defaults
 
-    def _get_cache_str(self, s: str) -> str:
+    def _get_cache_str(self, s: str, limit: int) -> str:
         """Return a hash identifier for the KV cache
         based on the input string and the model config.
 
         Args:
             s (str): Context string that will be cached
+            limit (int): Token length limit, before truncation occurs
 
         Returns:
             str: Filename hash used for caching
@@ -118,20 +124,30 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         hash_fn = hashlib.md5()
         for item in [model_config, s]:
             hash_fn.update(item.encode())
+        hash_fn.update(struct.pack("<L", limit))
 
         return f"{hash_fn.hexdigest()}"
 
     @staticmethod
-    def _kv_to_tuple(kv_cache: torch.Tensor) -> KVCache:
+    def _kv_to_tuple(kv_cache: Tensor) -> KVCache:
         return tuple((layer[0], layer[1]) for layer in kv_cache)
 
     @staticmethod
-    def _kv_to_tensor(kv_cache: KVCache) -> torch.Tensor:
+    def _kv_to_tensor(kv_cache: KVCache) -> Tensor:
+        """
+        Args:
+            past_key_values (KVCache): per-layer cache of (K, V) matrices, each
+            of shape (batch_size, num_heads, max_sequence_length, embed_size_per_head)
+
+        Returns:
+            Tensor:
+            (layer, 2, batch_size, num_heads, max_sequence_length, embed_size_per_head)
+        """
         return torch.stack([torch.stack(kv) for kv in kv_cache])
 
     def _save_kv_cache(
         self,
-        past_key_values: KVCache,
+        past_key_values: Tensor,
         filepaths: List[Path],
         sequence_lens: List[Optional[int]],
     ) -> None:
@@ -141,12 +157,11 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         (num_layers, 2, 1, num_heads, sequence_lens[i], embed_size_per_head)
 
         Args:
-            past_key_values (KVCache): per-layer cache of (K, V) matrices, each
-            of shape (batch_size, num_heads, max_sequence_length, embed_size_per_head)
+            past_key_values (Tensor): as returned by _kv_to_tensor
             filepaths (List[Path]): per-sequence filepath
             sequence_lens (List[Optional[int]]): per-sequence sequence_length
         """
-        batch_size = past_key_values[0][0].shape[0]
+        batch_size = past_key_values.shape[2]
         assert (
             len(filepaths) == batch_size
         ), "Number of filepaths needs to match the batch size"
@@ -154,49 +169,68 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             len(sequence_lens) == batch_size
         ), "Number of sequence lengths needs to match the batch size"
 
-        past_key_values_t = self._kv_to_tensor(past_key_values)
         for i, (sequence_len, filepath) in enumerate(zip(sequence_lens, filepaths)):
             filepath.parent.mkdir(parents=True, exist_ok=True)
             # Expect right-padded batch
             torch.save(
-                past_key_values_t[:, :, i : i + 1, :, :sequence_len, :].clone(),
+                past_key_values[:, :, i : i + 1, :, :sequence_len, :].clone(),
                 filepath,
             )
 
-    def generate_kv_cache(self, text: List[str], dir_path: str) -> None:
+    def prefill_with_cache(
+        self, text: List[str], max_context_length: int, dir_path: Optional[str]
+    ) -> List[Tensor]:
         """Given a batch of input strings, run the model and save
         the KV cache for each sequence individually.
         Note: uses right padding when batching.
 
         Args:
             text (List[str]): Batch of text inputs
-            dir_path (str): Directory for storing the KV cache
+            max_context_length (int): Maximum length of context (trims from the left
+            to fit inside this limit)
+            dir_path (Optional[str]): Directory for storing the KV cache
+
+        Returns:
+            List[Tensor]: [batch_size x
+            (layer, 2, 1, num_heads, sequence_length, embed_size_per_head)]
         """
-        with self.tokenizer_padding("right"):
-            enc = self.tokenizer(text, return_tensors="pt", padding=True)
+        with self.tokenizer_override(padding="right", truncation="left"):
+            enc = self.tokenizer(
+                text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=max_context_length,
+            )
 
         input_ids, attention_mask = enc["input_ids"], enc["attention_mask"]
 
         with torch.no_grad():
-            past_key_values = self.model(
-                input_ids=input_ids, attention_mask=attention_mask
-            ).past_key_values
+            out = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        past_key_values = self._kv_to_tensor(out.past_key_values)
 
         # Get the actual length of each sequence in the batch
         sequence_lens = attention_mask.sum(dim=-1).tolist()
 
-        # Get the filepath hash for each sequence
-        filepaths = [
-            Path(dir_path) / Path(self._get_cache_str(s) + ".pt") for s in text
-        ]
+        if dir_path:
+            # Get the filepath hash for each sequence
+            filepaths = [
+                Path(dir_path) / (self._get_cache_str(s, max_context_length) + ".pt")
+                for s in text
+            ]
+            self._save_kv_cache(past_key_values, filepaths, sequence_lens)
 
-        self._save_kv_cache(past_key_values, filepaths, sequence_lens)
+        return [
+            past_key_values[:, :, i : i + 1, :, :sequence_len, :]
+            for i, sequence_len in enumerate(sequence_lens)
+        ]
 
     def greedy_sample(
         self,
         ctxs: List[str],
         prompts: List[str],
         num_generated_tokens: int,
+        max_prompt_and_generated_tokens: int = 256,
         use_cache: bool = True,
         cache_dir: str = "cache/",
     ) -> Tensor:
@@ -208,6 +242,8 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             ctxs (List[str]): List of context strings prepended to prompts
             prompts (List[str]): List of prompt strings
             num_generated_tokens (int): Number of generated tokens
+            max_prompt_and_generated_tokens (int, optional): Number of tokens
+            to allocate to prompt and generation. Defaults to 256.
             use_cache (bool, optional): Load ctx KV cache from disk if it exits.
             If not, first generate and save the cache. Defaults to True.
             cache_dir (str, optional): Directory for saving/loading KV cache.
@@ -220,21 +256,12 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         assert len(ctxs) == len(
             prompts
         ), "Number of context and prompt strings should be the same"
+        max_context_length = self.max_length - max_prompt_and_generated_tokens
 
-        if not use_cache:
-            with self.tokenizer_padding("left"):
-                inp = self.tokenizer(
-                    [ctx + prompt for ctx, prompt in zip(ctxs, prompts)],
-                    return_tensors="pt",
-                    padding=True,
-                )
-            input_ids = inp["input_ids"]
-            attention_mask = inp["attention_mask"]
-            past_key_values = None
-            position_ids = None
-        else:
+        if use_cache:
             filepaths = [
-                Path(cache_dir, self._get_cache_str(ctx) + ".pt") for ctx in ctxs
+                Path(cache_dir) / (self._get_cache_str(ctx, max_context_length) + ".pt")
+                for ctx in ctxs
             ]
             cache_exists = [filepath.exists() for filepath in filepaths]
 
@@ -243,50 +270,63 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                 ctxs_to_cache = [
                     ctx for ctx, exist in zip(ctxs, cache_exists) if not exist
                 ]
-                self.generate_kv_cache(ctxs_to_cache, dir_path=cache_dir)
+                self.prefill_with_cache(
+                    ctxs_to_cache,
+                    max_context_length=max_context_length,
+                    dir_path=cache_dir,
+                )
 
             # All KV caches should be available now
             cache_exists = [filepath.exists() for filepath in filepaths]
             assert all(cache_exists), "Issue generating KV cache"
-
-            # Left-pad the KV caches to maximum sequence length in batch
             cache = [torch.load(filepath) for filepath in filepaths]
-            seq_lens = [pkv.shape[-2] for pkv in cache]
-            max_len = max(seq_lens)
-            past_key_values = torch.cat(
-                [
-                    pad(pkv, (0, 0, max_len - seq_len, 0))
-                    for pkv, seq_len in zip(cache, seq_lens)
-                ],
-                dim=2,
-            )
-            attention_mask_left = torch.tensor(
-                [[i >= max_len - len for i in range(max_len)] for len in seq_lens]
-            ).long()
-
-            # Tokenize prompts with left padding (easier generation)
-            with self.tokenizer_padding("left"):
-                prompts_enc = self.tokenizer(prompts, return_tensors="pt", padding=True)
-
-            input_ids = prompts_enc["input_ids"]
-            attention_mask_right = prompts_enc["attention_mask"]
-
-            # Apply correct position ids given padding tokens
-            q_len = input_ids.shape[-1]
-            q_no_pad_lens = attention_mask_right.sum(dim=-1)
-            position_ids = torch.stack(
-                [
-                    torch.arange(
-                        seq_len - (q_len - q_no_pad_len), seq_len + q_no_pad_len
-                    )
-                    for seq_len, q_no_pad_len in zip(seq_lens, q_no_pad_lens)
-                ]
+        else:
+            cache = self.prefill_with_cache(
+                ctxs, max_context_length=max_context_length, dir_path=None
             )
 
-            # Concatanate cache and prompts attention masks
-            attention_mask = torch.cat(
-                [attention_mask_left, attention_mask_right], dim=1
+        # Left-pad the KV caches to maximum sequence length in batch
+        seq_lens = [pkv.shape[-2] for pkv in cache]
+        max_len = max(seq_lens)
+        past_key_values = torch.cat(
+            [
+                pad(pkv, (0, 0, max_len - seq_len, 0))
+                for pkv, seq_len in zip(cache, seq_lens)
+            ],
+            dim=2,
+        )
+        attention_mask_left = torch.tensor(
+            [[i >= max_len - len for i in range(max_len)] for len in seq_lens]
+        ).long()
+
+        # Tokenize prompts with left padding (easier generation)
+        with self.tokenizer_override(padding="left", truncation="left"):
+            prompts_enc = self.tokenizer(
+                prompts, return_tensors="pt", padding=True, truncation=False
             )
+
+        input_ids = prompts_enc["input_ids"]
+        attention_mask_right = prompts_enc["attention_mask"]
+        if max_prompt_and_generated_tokens < input_ids.shape[1] + num_generated_tokens:
+            logger.warning(
+                "length of prompt (%d) + generation (%d) is more than reserved (%d)",
+                input_ids.shape[1],
+                num_generated_tokens,
+                max_prompt_and_generated_tokens,
+            )
+
+        # Apply correct position ids given padding tokens
+        q_len = input_ids.shape[-1]
+        q_no_pad_lens = attention_mask_right.sum(dim=-1)
+        position_ids = torch.stack(
+            [
+                torch.arange(seq_len - (q_len - q_no_pad_len), seq_len + q_no_pad_len)
+                for seq_len, q_no_pad_len in zip(seq_lens, q_no_pad_lens)
+            ]
+        )
+
+        # Concatanate cache and prompts attention masks
+        attention_mask = torch.cat([attention_mask_left, attention_mask_right], dim=1)
 
         # Generate tokens one by one
         generated_tokens = []
