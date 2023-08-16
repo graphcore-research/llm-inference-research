@@ -230,7 +230,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         ctxs: List[str],
         prompts: List[str],
         num_generated_tokens: int,
-        max_prompt_and_generated_tokens: int = 128,
+        max_prompt_and_generated_tokens: int = 256,
         use_cache: bool = True,
         cache_dir: str = "cache/",
     ) -> Tensor:
@@ -243,7 +243,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             prompts (List[str]): List of prompt strings
             num_generated_tokens (int): Number of generated tokens
             max_prompt_and_generated_tokens (int, optional): Number of tokens
-            to allocate to prompt and generation. Defaults to 128.
+            to allocate to prompt and generation. Defaults to 256.
             use_cache (bool, optional): Load ctx KV cache from disk if it exits.
             If not, first generate and save the cache. Defaults to True.
             cache_dir (str, optional): Directory for saving/loading KV cache.
