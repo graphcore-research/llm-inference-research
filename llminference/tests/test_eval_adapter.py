@@ -24,13 +24,17 @@ def test_get_cache_str() -> None:
     s1 = "This is some text"
     s2 = "This is some text"
     s3 = "This is different text"
-    # Same model, same text
-    assert adapter1._get_cache_str(s1) == adapter2._get_cache_str(s1)
-    assert adapter1._get_cache_str(s1) == adapter1._get_cache_str(s2)
-    # Same model, different text
-    assert adapter1._get_cache_str(s1) != adapter1._get_cache_str(s3)
-    # Different model, same text
-    assert adapter1._get_cache_str(s1) != adapter3._get_cache_str(s1)
+    n1 = 1024
+    n2 = 768
+    # Same model, same text, same length
+    assert adapter1._get_cache_str(s1, n1) == adapter2._get_cache_str(s1, n1)
+    assert adapter1._get_cache_str(s1, n1) == adapter1._get_cache_str(s2, n1)
+    # Same model, different text, same length
+    assert adapter1._get_cache_str(s1, n1) != adapter1._get_cache_str(s3, n1)
+    # Different model, same text, same length
+    assert adapter1._get_cache_str(s1, n1) != adapter3._get_cache_str(s1, n1)
+    # Same model, same text, different length
+    assert adapter1._get_cache_str(s1, n1) != adapter1._get_cache_str(s1, n2)
 
 
 def test_prefill_with_cache() -> None:
@@ -47,7 +51,7 @@ def test_prefill_with_cache() -> None:
         pkv = adapter._kv_to_tensor(adapter.model(**inp).past_key_values)
         torch.testing.assert_close(out[i], pkv)
         torch.testing.assert_close(args[0], pkv)
-        assert args[1] == Path(dir_path, adapter._get_cache_str(ctx) + ".pt")
+        assert args[1] == Path(dir_path, adapter._get_cache_str(ctx, 64) + ".pt")
 
 
 @contextmanager
