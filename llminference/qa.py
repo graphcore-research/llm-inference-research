@@ -85,6 +85,7 @@ def evaluate(
     open_book: bool = False,
     use_cache: bool = True,
     cache_dir: str = CACHE_DIR,
+    desc: Optional[str] = None,
 ) -> Iterable[AnyDict]:
     """Evaluate a generic QA task consisting of a list of examples, each a
     dictionary with keys "context", "prompt", and "answers".
@@ -108,7 +109,7 @@ def evaluate(
     """
     for batch in tqdm(
         batches(examples, batch_size),
-        desc=f"Evaluating {adapter.model.name_or_path}",
+        desc=desc or f"Evaluating {adapter.model.name_or_path}",
         total=ceil(len(examples) / batch_size),
     ):
         max_answer_tokens = max(
