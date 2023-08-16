@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
+import datasets
+
 from .. import utility
 
 
@@ -31,3 +33,12 @@ def test_multiprocess_sweep(tmp_path: Path) -> None:
     assert {r["result"] for r in results if "_error" not in r} == {
         10 * i for i in range(9) if i != 5
     }
+
+
+def test_map_and_filter() -> None:
+    out = utility.map_and_filter(
+        datasets.Dataset.from_list([dict(input=n) for n in range(10)]),
+        lambda x: dict(output=100 * x["input"]) if x["input"] % 3 == 0 else None,
+    )
+    assert list(out.features) == ["output"]
+    assert list(out["output"]) == [0, 300, 600, 900]
