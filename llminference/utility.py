@@ -8,8 +8,9 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, TypeVar, cast
+from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar, cast
 
+import datasets
 import torch
 import tqdm
 
@@ -33,7 +34,7 @@ AnyDict = Dict[str, Any]
 
 def _sweep_runner(
     task: Callable[..., AnyDict], task_args: AnyDict, n_threads: int
-) -> Dict[str, Any]:
+) -> AnyDict:
     sys.stdout = open(os.devnull, "w")
     sys.stderr = open(os.devnull, "w")
     torch.set_num_threads(n_threads)
@@ -55,7 +56,7 @@ def _sweep_runner(
 
 def run_multiprocess_sweep(
     task: Callable[..., AnyDict],
-    settings: List[Dict[str, Any]],
+    settings: List[AnyDict],
     dest: Path,
     n_workers: int,
     max_threads_per_worker: int = 32,
@@ -93,4 +94,27 @@ def run_multiprocess_sweep(
     print(
         f"Finished sweep ({n_error}/{n+1} failed) -> {dest}",
         file=sys.stderr,
+    )
+
+
+def map_and_filter(
+    data: datasets.Dataset, fn: Callable[[AnyDict], Optional[AnyDict]]
+) -> datasets.Dataset:
+    """Like `Dataset.map`, but if the function returns None, filter out that row.
+
+    Also, only return output columns from fn(), don't pass-through any original columns.
+    """
+
+    def mapper(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
+        batch_size = len(next(iter(batch.values())))
+        # Unstack the batch to call fn()
+        all_outputs = (
+            fn({k: batch[k][i] for k in batch.keys()}) for i in range(batch_size)
+        )
+        outputs = list(filter(None, all_outputs))
+        # Restack the batch for the output
+        return {k: [o[k] for o in outputs] for k in outputs[0]} if outputs else {}
+
+    return data.map(
+        mapper, batched=True, batch_size=None, remove_columns=list(data.features)
     )

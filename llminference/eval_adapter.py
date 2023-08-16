@@ -319,6 +319,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                 for seq_len, q_no_pad_len in zip(seq_lens, q_no_pad_lens)
             ]
         )
+        position_ids.masked_fill_(position_ids < 0, 0)
 
         # Concatanate cache and prompts attention masks
         attention_mask = torch.cat([attention_mask_left, attention_mask_right], dim=1)

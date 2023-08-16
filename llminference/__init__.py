@@ -1,7 +1,7 @@
 from . import (  # noqa: F401
     eval_adapter,
-    eval_utils,
     outcompare,
+    qa,
     quantisation,
     sparse_attention,
     utility,
