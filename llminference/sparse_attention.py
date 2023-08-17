@@ -7,7 +7,9 @@ from torch import Tensor
 _softmax = F.softmax
 
 
-def sparse_softmax_fixed_k(x: Tensor, k: int, dim: int = -1) -> Tensor:
+def sparse_softmax_fixed_k(
+    x: Tensor, k: int, dim: int = -1, add_avg: bool = False
+) -> Tensor:
     """Applies softmax accross last dimension, keeping top k
     elements of the output.
 
@@ -15,6 +17,8 @@ def sparse_softmax_fixed_k(x: Tensor, k: int, dim: int = -1) -> Tensor:
         x (Tensor): shape (batch_size, num_heads, q_len, k_len)
         k (int): Number of attention scores to keep
         dim (int, optional): Assumed dim = -1
+        add_avg (bool, optional): If True, assign the non-top-k
+        softmax weight equally to non-top-k tokens.
 
     Returns:
         Tensor: shape (batch_size, num_heads, q_len, k_len)
@@ -25,7 +29,11 @@ def sparse_softmax_fixed_k(x: Tensor, k: int, dim: int = -1) -> Tensor:
         return y
 
     kth_val = -torch.kthvalue(-y, k, keepdim=True).values
-    return cast(Tensor, (y >= kth_val) * y)
+    mask = y >= kth_val
+    out: Tensor = mask * y
+    if add_avg:
+        out += ~mask * (1 - out.sum(dim=-1, keepdim=True)) / (out.shape[-1] - k)
+    return out
 
 
 def sparse_softmax_fixed_p(
