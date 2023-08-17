@@ -1,0 +1,10 @@
+{"model": "pythia-70m", "acc": 0.029213483146067417, "open_book": true, "_duration": 44.52888822555542}
+{"model": "pythia-70m", "acc": 0.0044943820224719105, "open_book": false, "_duration": 22.250351190567017}
+{"model": "pythia-160m", "acc": 0.04269662921348315, "open_book": true, "_duration": 146.67054295539856}
+{"model": "pythia-160m", "acc": 0.0044943820224719105, "open_book": false, "_duration": 48.218528032302856}
+{"model": "pythia-410m", "acc": 0.23370786516853934, "open_book": true, "_duration": 463.1044373512268}
+{"model": "pythia-410m", "acc": 0.017977528089887642, "open_book": false, "_duration": 110.46236896514893}
+{"model": "pythia-1b", "acc": 0.35730337078651686, "open_book": true, "_duration": 809.5791091918945}
+{"model": "pythia-1b", "acc": 0.024719101123595506, "open_book": false, "_duration": 190.33520698547363}
+{"model": "pythia-2.8b", "acc": 0.47191011235955055, "open_book": true, "_duration": 1994.2293977737427}
+{"model": "pythia-2.8b", "acc": 0.0449438202247191, "open_book": false, "_duration": 463.31121587753296}
