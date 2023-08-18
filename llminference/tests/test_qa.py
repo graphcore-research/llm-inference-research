@@ -2,8 +2,59 @@ import itertools as it
 import unittest.mock as um
 from typing import Any, List
 
+import pytest
+
 from .. import qa
 from ..eval_adapter import Adapter
+
+
+def test_datasets() -> None:
+    for cls in [qa.TriviaQA, qa.SQuAD]:
+        data = cls.data()  # type:ignore[attr-defined]
+        assert len(data) > 100
+        assert set(data.features) == {
+            "question_id",
+            "question",
+            "answers",
+            "context",
+            "examples",
+        }
+        assert set(map(len, data["examples"])) == {5}
+        average_context_chars = sum(map(len, data["context"])) / len(data)
+        assert 4000 <= average_context_chars <= 8000
+
+
+def test_add_prompt() -> None:
+    datum = dict(
+        question_id="#0",
+        question="Dummy qu",
+        context="Dummy context",
+        answers=["A1", "A2"],
+        examples=[
+            dict(question="Eg 1", answers=["long answer 1", "shortans1"]),
+            dict(question="Eg 2", answers=["shortans2", "long answer 2"]),
+        ],
+    )
+    # Zero shot
+    example = qa.add_zero_shot_prompt(datum, "\nQ: {question}\nA:")
+    assert example.pop("prompt") == "\nQ: Dummy qu\nA:"
+    assert example == datum
+
+    # Two shot
+    example = qa.add_few_shot_prompt(datum, k=2, prompt_template="\nQ: {question}\nA:")
+    assert example["prompt"] == "".join(
+        [
+            "\nQ: Eg 1\nA: shortans1",
+            "\nQ: Eg 2\nA: shortans2",
+            "\nQ: Dummy qu\nA:",
+        ]
+    )
+
+    # Too-many-shot
+    with pytest.raises(ValueError) as error:
+        qa.add_few_shot_prompt(datum, k=3)
+    assert "k=3" in str(error)
+    assert "2 examples" in str(error)
 
 
 def test_evaluate_prediction() -> None:

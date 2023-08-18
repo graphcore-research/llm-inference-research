@@ -35,6 +35,15 @@ def test_multiprocess_sweep(tmp_path: Path) -> None:
     }
 
 
+def test_map_full_batch() -> None:
+    out = utility.map_full_batch(
+        datasets.Dataset.from_list([dict(input=n) for n in range(5)]),
+        lambda rows: (dict(output=x["input"]) for x in rows[::-1]),
+    )
+    assert list(out.features) == ["output"]
+    assert list(out["output"]) == [4, 3, 2, 1, 0]
+
+
 def test_map_and_filter() -> None:
     out = utility.map_and_filter(
         datasets.Dataset.from_list([dict(input=n) for n in range(10)]),

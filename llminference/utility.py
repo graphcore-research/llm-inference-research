@@ -97,10 +97,10 @@ def run_multiprocess_sweep(
     )
 
 
-def map_and_filter(
-    data: datasets.Dataset, fn: Callable[[AnyDict], Optional[AnyDict]]
+def map_full_batch(
+    data: datasets.Dataset, fn: Callable[[List[AnyDict]], Iterable[AnyDict]]
 ) -> datasets.Dataset:
-    """Like `Dataset.map`, but if the function returns None, filter out that row.
+    """Transform a dataset with `fn`, mapping a list of input rows to output rows.
 
     Also, only return output columns from fn(), don't pass-through any original columns.
     """
@@ -108,13 +108,21 @@ def map_and_filter(
     def mapper(batch: Dict[str, List[Any]]) -> Dict[str, List[Any]]:
         batch_size = len(next(iter(batch.values())))
         # Unstack the batch to call fn()
-        all_outputs = (
-            fn({k: batch[k][i] for k in batch.keys()}) for i in range(batch_size)
-        )
-        outputs = list(filter(None, all_outputs))
+        rows_in = [{k: batch[k][i] for k in batch} for i in range(batch_size)]
+        rows_out = list(fn(rows_in))
         # Restack the batch for the output
-        return {k: [o[k] for o in outputs] for k in outputs[0]} if outputs else {}
+        return {k: [r[k] for r in rows_out] for k in rows_out[0]} if rows_out else {}
 
     return data.map(
         mapper, batched=True, batch_size=None, remove_columns=list(data.features)
     )
+
+
+def map_and_filter(
+    data: datasets.Dataset, fn: Callable[[AnyDict], Optional[AnyDict]]
+) -> datasets.Dataset:
+    """Like `Dataset.map`, but if the function returns None, filter out that row.
+
+    Also, only return output columns from fn(), don't pass-through any original columns.
+    """
+    return map_full_batch(data, lambda rows: filter(None, map(fn, rows)))
