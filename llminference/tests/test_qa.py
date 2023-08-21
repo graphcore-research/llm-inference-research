@@ -9,8 +9,12 @@ from ..eval_adapter import Adapter
 
 
 def test_datasets() -> None:
-    for cls in [qa.TriviaQA, qa.SQuAD]:
-        data = cls.data()  # type:ignore[attr-defined]
+    for cls, kwargs in [
+        (qa.TriviaQA, dict(context="search")),
+        (qa.TriviaQA, dict(context="wiki")),
+        (qa.SQuAD, {}),
+    ]:
+        data = cls.data(**kwargs)  # type:ignore[attr-defined]
         assert len(data) > 100
         assert set(data.features) == {
             "question_id",

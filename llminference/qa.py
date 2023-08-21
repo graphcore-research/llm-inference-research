@@ -47,6 +47,7 @@ class TriviaQA:
         examples: int = 5,
         chars_range: Tuple[int, int] = (4000, 8000),
         seed: int = 2751584,
+        context: str = "search",
     ) -> Iterable[AnyDict]:
         """Generate a few-shot generative evaluation dataset from TriviaQA.
 
@@ -56,13 +57,21 @@ class TriviaQA:
                  "context": str,
                  "examples": [{"question_id": str, "question": str, "answers": [str]}]}
         """
+        if context not in ["search", "wiki"]:
+            raise ValueError(
+                f"{context} is not a valid value for context"
+                ", set to either 'search' or 'wiki'."
+            )
         rng = np.random.RandomState(seed)
         for row in rows:
-            # Take the first context doc that has an in-range length
+            # Take a random context doc that has an in-range length
+            contexts = (
+                row["entity_pages"]["wiki_context"]
+                if context == "wiki"
+                else row["search_results"]["search_context"]
+            )
             filtered_contexts = [
-                c
-                for c in row["search_results"]["search_context"]
-                if chars_range[0] <= len(c) <= chars_range[1]
+                c for c in contexts if chars_range[0] <= len(c) <= chars_range[1]
             ]
             if filtered_contexts:
                 # Ensure we never use this question as a few-shot example
@@ -72,9 +81,10 @@ class TriviaQA:
                     for i in rng.choice(len(rows), examples + 2)
                     if rows[i]["question_id"] != row["question_id"]
                 ][:examples]
+                doc_idx = rng.randint(len(filtered_contexts))
                 yield dict(
                     **cls.make_example(row),
-                    context=filtered_contexts[0],
+                    context=filtered_contexts[doc_idx],
                     examples=few_shot_examples,
                 )
 
