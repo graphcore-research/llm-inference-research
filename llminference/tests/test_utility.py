@@ -1,8 +1,12 @@
+import contextlib
+import io
 import json
+import unittest.mock as um
 from pathlib import Path
 from typing import Any, Dict
 
 import datasets
+import pytest
 
 from .. import utility
 
@@ -15,6 +19,26 @@ def _fake_task(value: int) -> Dict[str, Any]:
     if value == 5:
         raise ValueError("High five!")
     return dict(result=value * 10)
+
+
+def test_jsonlines_writer() -> None:
+    with pytest.raises(FileExistsError), um.patch(
+        "pathlib.Path.exists", lambda _: True
+    ):
+        with utility.jsonlines_writer("existing.jsonl") as _:
+            pass
+
+    buf = io.StringIO()
+    with um.patch("pathlib.Path.exists", lambda _: False), um.patch(
+        "pathlib.Path.mkdir"
+    ), um.patch("pathlib.Path.open", lambda *_: contextlib.nullcontext(buf)):
+        with utility.jsonlines_writer("new.jsonl") as writer:
+            writer(dict(n=1, result=True))
+            writer(dict(n=2, result=False))
+    assert [json.loads(line) for line in buf.getvalue().rstrip("\n").split("\n")] == [
+        dict(n=1, result=True),
+        dict(n=2, result=False),
+    ]
 
 
 def test_multiprocess_sweep(tmp_path: Path) -> None:

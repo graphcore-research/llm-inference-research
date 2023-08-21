@@ -7,8 +7,20 @@ import os
 import sys
 import time
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, TypeVar, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    TypeVar,
+    Union,
+    cast,
+)
 
 import datasets
 import torch
@@ -54,6 +66,20 @@ def _sweep_runner(
         )
 
 
+@contextmanager
+def jsonlines_writer(path: Union[str, Path]) -> Iterator[Callable[[AnyDict], None]]:
+    """Create a function that writes results to a jsonlines file.
+
+    Fails if `path` already exists (so we don't accidentally overwrite results).
+    """
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(f"File {path} already exists")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        yield lambda line: print(json.dumps(line), file=f, flush=True)
+
+
 def run_multiprocess_sweep(
     task: Callable[..., AnyDict],
     settings: List[AnyDict],
@@ -62,7 +88,6 @@ def run_multiprocess_sweep(
     max_threads_per_worker: int = 32,
 ) -> None:
     """Run a sweep in worker processes, saving the results to a .jsonl file."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         time = datetime.datetime.now().isoformat(timespec="seconds")
         dest = dest.parent / f"{dest.stem}-{time}{dest.suffix}"
@@ -71,9 +96,9 @@ def run_multiprocess_sweep(
 
     n_error = 0
     n_threads = min(max_threads_per_worker, cast(int, os.cpu_count()) // n_workers)
-    with multiprocessing.Pool(n_workers, maxtasksperchild=1) as pool, dest.open(
-        "w"
-    ) as destfile:
+    with multiprocessing.Pool(n_workers, maxtasksperchild=1) as pool, jsonlines_writer(
+        dest
+    ) as write:
         results = tqdm.tqdm(
             [
                 pool.apply_async(
@@ -87,7 +112,7 @@ def run_multiprocess_sweep(
         )
         for n, result in enumerate(results):
             out = result.get()
-            print(json.dumps(out), file=destfile, flush=True)
+            write(out)
             n_error += "_error" in out
             if n_error:
                 results.set_description(f"{n_error}/{n+1} failed")
