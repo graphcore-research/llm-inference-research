@@ -265,10 +265,13 @@ def evaluate(
         output_spare_tokens (int, optional): Defaults to 5.
         open_book (bool, optional): Prepend context to the prompt.
         Defaults to False.
+        generation_context (ModelContext, optional): Override model
+        during generation.
         use_cache (bool, optional): Use cached context when sampling.
         Defaults to True.
         cache_dir (str, optional): Context cache path.
         Defaults to CACHE_DIR.
+        desc (str, optional): tqdm description
 
     Yields:
         {"question_id": int, "output": str, "match": bool}: One for each input
