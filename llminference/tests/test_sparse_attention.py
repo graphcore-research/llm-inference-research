@@ -44,6 +44,16 @@ def test_sparse_softmax_fixed_k_add_avg() -> None:
     torch.testing.assert_close(out, expected)
 
 
+def test_sparse_softmax_fixed_k_out_weights() -> None:
+    k = 2
+    x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4])
+    out_weights = torch.tensor([1.0, 100.0, 1.0, 1.0, 1.0])
+    s = F.softmax(x, dim=-1)
+    expected = torch.tensor([0, s[1], s[2], 0, 0])
+    out = sa.sparse_softmax_fixed_k(x, k, out_weights=out_weights)
+    torch.testing.assert_close(out, expected)
+
+
 def test_sparse_softmax_fixed_p_half() -> None:
     p = 0.5
     k_min = 1

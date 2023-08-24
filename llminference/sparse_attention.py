@@ -1,14 +1,21 @@
-from typing import cast
+import unittest.mock as um
+from functools import partial
+from typing import Any, Optional, Tuple, cast
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention
 
 _softmax = F.softmax
 
 
 def sparse_softmax_fixed_k(
-    x: Tensor, k: int, dim: int = -1, add_avg: bool = False
+    x: Tensor,
+    k: int,
+    dim: int = -1,
+    add_avg: bool = False,
+    out_weights: Optional[Tensor] = None,
 ) -> Tensor:
     """Applies softmax accross last dimension, keeping top k
     elements of the output.
@@ -19,17 +26,25 @@ def sparse_softmax_fixed_k(
         dim (int, optional): Assumed dim = -1
         add_avg (bool, optional): If True, assign the non-top-k
         softmax weight equally to non-top-k tokens.
+        out_weights (Optional[Tensor], optional): shape (broadcastable to x)
+        If passed, multiplies softmax scores with out_weights
+        before choosing top-k.
 
     Returns:
         Tensor: shape (batch_size, num_heads, q_len, k_len)
     """
     assert dim == -1
+    if out_weights is None:
+        out_weights = torch.tensor(1.0, dtype=x.dtype, device=x.device)
+
     y = _softmax(x, dim=-1)
     if k >= x.shape[-1]:
         return y
 
-    kth_val = -torch.kthvalue(-y, k, keepdim=True).values
-    mask = y >= kth_val
+    y_weighted = y * out_weights
+    kth_val = -torch.kthvalue(-y_weighted, k, keepdim=True).values
+
+    mask = y_weighted >= kth_val
     out: Tensor = mask * y
     if add_avg:
         out += ~mask * (1 - out.sum(dim=-1, keepdim=True)) / (out.shape[-1] - k)
@@ -101,3 +116,32 @@ def local_softmax(
         return _softmax(x, dim=-1) * local_mask.logical_not()
     else:
         return _softmax(x.masked_fill(local_mask, -1e9), -1)
+
+
+original_attn = GPTNeoXAttention._attn
+
+
+def sparse_attn(
+    self: GPTNeoXAttention,
+    query: Tensor,
+    key: Tensor,
+    value: Tensor,
+    attention_mask: Optional[Tensor] = None,
+    head_mask: Optional[Tensor] = None,
+    use_v_mag: bool = False,
+    **sa_args: Any
+) -> Tuple[Tensor, Tensor]:
+    if use_v_mag:
+        # value.shape = (batch_size, num_heads, k_len, head_dim)
+        # v_norm.shape = (batch_size, num_heads, 1, k_len)
+        v_norm = value.norm(dim=-1).unsqueeze(dim=-2)
+    else:
+        v_norm = None
+    with um.patch(
+        "torch.nn.functional.softmax",
+        partial(sparse_softmax_fixed_k, **sa_args, out_weights=v_norm),
+    ):
+        out: Tuple[Tensor, Tensor] = original_attn(
+            self, query, key, value, attention_mask, head_mask
+        )
+    return out
