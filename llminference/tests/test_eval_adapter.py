@@ -1,10 +1,12 @@
+import collections
 import unittest.mock as um
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from typing import Dict, Iterator, Optional, cast
 
 import lm_eval.evaluator
 import torch
+from torch import Tensor
 
 from .. import eval_adapter
 
@@ -55,17 +57,19 @@ def test_prefill_with_cache() -> None:
 
 
 @contextmanager
-def torch_load_save_to_memory() -> Iterator[None]:
-    cache = {}
+def torch_load_save_to_memory(
+    cache: Optional[Dict[Path, Tensor]] = None
+) -> Iterator[None]:
+    cache_dict = {} if cache is None else cache
 
-    def save_to_dict(t: torch.Tensor, path: Path) -> None:
-        cache[path] = t
+    def save_to_dict(t: Tensor, path: Path) -> None:
+        cache_dict[path] = t
 
-    def load_from_dict(path: Path) -> torch.Tensor:
-        return cache[path]
+    def load_from_dict(path: Path) -> Tensor:
+        return cache_dict[path]
 
     def exists_in_dict(path: Path) -> bool:
-        return path in cache
+        return path in cache_dict
 
     with um.patch("torch.save", save_to_dict), um.patch(
         "torch.load", load_from_dict
@@ -87,10 +91,10 @@ def test_greedy_sample() -> None:
     )
     assert max_ctx < len(adapter.tok_encode(ctxs[1]))
 
-    def run_reference(ctx: str, question: str) -> torch.Tensor:
+    def run_reference(ctx: str, question: str) -> Tensor:
         ctx_ids = adapter.tok_encode(ctx)[-max_ctx:]
         input_ids = ctx_ids + adapter.tok_encode(question)
-        out: torch.Tensor = adapter.model.generate(
+        out: Tensor = adapter.model.generate(
             torch.tensor(input_ids)[None],
             max_length=len(input_ids) + num_generated_tokens,
         )
@@ -115,3 +119,66 @@ def test_greedy_sample() -> None:
                 out_expected,
                 msg=f"greedy_sample mismatch when use_cache={use_cache}",
             )
+
+
+def test_greedy_sample_generation_context() -> None:
+    adapter = eval_adapter.Adapter.from_pretrained("EleutherAI/pythia-70m")
+    context = ["You think greedy sampling is wrong because greed is wrong."]
+    prompt = [" I think"]
+
+    @contextmanager
+    def prune_model_context(model: eval_adapter.Model) -> eval_adapter.Model:
+        original_params = {k: v.clone() for k, v in model.state_dict().items()}
+        for p in model.parameters():
+            p.data *= (p.abs().max() / 1000) < p.abs()
+        yield model
+        model.load_state_dict(original_params)
+
+    outputs: Dict[str, Dict[str, str]] = collections.defaultdict(dict)
+    caches: Dict[str, Dict[Path, Tensor]] = collections.defaultdict(dict)
+    for name, generation_context in [
+        ("default", eval_adapter.null_model_context),
+        ("pruned", prune_model_context),
+    ]:
+        with torch_load_save_to_memory(caches[name]):
+            for use_cache in [False, True]:
+                # Run twice to see what the cache-hit behaviour is
+                for run in range(2):
+                    out = adapter.greedy_sample(
+                        context,
+                        prompt,
+                        num_generated_tokens=8,
+                        generation_context=generation_context,
+                        use_cache=use_cache,
+                    )
+                    outputs[name][
+                        f"cache_{run}" if use_cache else f"nocache_{run}"
+                    ] = adapter.tok_decode(out[0])
+
+    # Pruning gives different outputs
+    assert outputs["default"]["nocache_0"] != outputs["pruned"]["nocache_0"]
+
+    # Default always gives the same output, regardless of caching
+    assert all(
+        v == outputs["default"]["nocache_0"] for v in outputs["default"].values()
+    )
+    # Pruning always gives the same output, regardless of caching
+    assert all(v == outputs["pruned"]["nocache_0"] for v in outputs["pruned"].values())
+
+    # The cached state is the same
+    for k in caches["default"]:
+        assert torch.equal(caches["default"][k], caches["pruned"][k])
+
+
+def dummy_fn() -> int:
+    return 100
+
+
+def test_patch_for_model() -> None:
+    model = cast(eval_adapter.Model, None)
+    assert dummy_fn() == 100
+    with eval_adapter.patch_for_model(f"{__name__}.dummy_fn", lambda a: a, a=200)(
+        model
+    ):
+        assert dummy_fn() == 200
+    assert dummy_fn() == 100

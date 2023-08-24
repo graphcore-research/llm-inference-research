@@ -1,19 +1,52 @@
 import hashlib
 import logging
 import struct
+import unittest.mock as um
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional, Tuple, cast
+from typing import (
+    Any,
+    Callable,
+    ContextManager,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    cast,
+)
 
 import lm_eval.base
 import torch
 import transformers
 from torch import Tensor
 from torch.nn.functional import pad
-
-KVCache = Tuple[Tuple[Tensor, Tensor], ...]
+from typing_extensions import TypeAlias
 
 logger = logging.getLogger(__name__)
+
+KVCache: TypeAlias = Tuple[Tuple[Tensor, Tensor], ...]
+Model: TypeAlias = transformers.PreTrainedModel
+ModelContext: TypeAlias = Callable[[Model], ContextManager[Model]]
+
+
+@contextmanager
+def null_model_context(model: Model) -> Iterator[Model]:
+    yield model
+
+
+def patch_for_model(
+    target: str, fn: Callable[..., Any], *args: Any, **kwargs: Any
+) -> ModelContext:
+    """Patch a function (globally) during ModelContext execution."""
+
+    @contextmanager
+    def model_context(model: Model) -> Iterator[Model]:
+        with um.patch(target, partial(fn, *args, **kwargs)):
+            yield model
+
+    return model_context
 
 
 class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
@@ -233,6 +266,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         max_prompt_and_generated_tokens: int = 256,
         use_cache: bool = True,
         cache_dir: str = "cache/",
+        generation_context: ModelContext = null_model_context,
     ) -> Tensor:
         """
         Sample greedily from the model assuming the prompts are ctx + prompt,
@@ -331,9 +365,9 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
 
         # Generate tokens one by one
         generated_tokens = []
-        with torch.no_grad():
+        with torch.no_grad(), generation_context(self.model) as model:
             for _ in range(num_generated_tokens):
-                out = self.model(
+                out = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     past_key_values=past_key_values,

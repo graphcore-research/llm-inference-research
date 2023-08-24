@@ -25,7 +25,7 @@ import numpy as np
 import regex as re
 from tqdm import tqdm
 
-from .eval_adapter import Adapter
+from .eval_adapter import Adapter, ModelContext, null_model_context
 from .utility import AnyDict, batches, map_full_batch
 
 CACHE_DIR = "/net/group/research/lukar/cache/"
@@ -248,6 +248,7 @@ def evaluate(
     output_token_limit: int = 30,
     output_spare_tokens: int = 5,
     open_book: bool = False,
+    generation_context: ModelContext = null_model_context,
     use_cache: bool = True,
     cache_dir: str = CACHE_DIR,
     desc: Optional[str] = None,
@@ -286,6 +287,7 @@ def evaluate(
             num_generated_tokens=min(
                 output_token_limit, output_spare_tokens + max_answer_tokens
             ),
+            generation_context=generation_context,
             use_cache=use_cache and open_book,
             cache_dir=cache_dir,
         )
