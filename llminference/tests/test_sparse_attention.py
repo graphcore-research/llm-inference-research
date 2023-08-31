@@ -1,7 +1,11 @@
+import unittest.mock as um
+from functools import partialmethod
+
 import torch
 import torch.nn.functional as F
 
 from .. import sparse_attention as sa
+from ..eval_adapter import Adapter
 
 
 def test_sparse_softmax_fixed_k() -> None:
@@ -181,3 +185,21 @@ def test_local_softmax_post() -> None:
     expected = torch.masked_fill(F.softmax(x, dim=-1), mask=mask, value=0.0)
     out = sa.local_softmax(x, context_len=context_len, apply_after_softmax=True)
     torch.testing.assert_close(out, expected)
+
+
+def test_sparse_attn_vary_k_per_layer() -> None:
+    adapter = Adapter.from_pretrained("EleutherAI/pythia-70m")
+    inp = adapter.tokenizer("She", return_tensors="pt")
+    model = adapter.model.gpt_neox
+    k_per_layer = [i + 1 for i in range(len(model.layers))]
+
+    with sa.number_attention_layers(model) as m, um.patch(
+        "transformers.models.gpt_neox.modeling_gpt_neox.GPTNeoXAttention._attn",
+        partialmethod(sa.sparse_attn, k_per_layer=k_per_layer),
+    ), um.patch(
+        "llminference.sparse_attention.sparse_softmax_fixed_k",
+        wraps=sa.sparse_softmax_fixed_k,
+    ) as mock_softmax:
+        m(**inp)
+    call_ks = [c.kwargs["k"] for c in mock_softmax.call_args_list]
+    assert k_per_layer == call_ks

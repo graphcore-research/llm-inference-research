@@ -1,11 +1,15 @@
 import unittest.mock as um
+from contextlib import contextmanager
 from functools import partial
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Iterator, List, Optional, Tuple, cast
 
 import torch
 import torch.nn.functional as F
 from torch import Tensor
-from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXAttention
+from transformers.models.gpt_neox.modeling_gpt_neox import (
+    GPTNeoXAttention,
+    GPTNeoXModel,
+)
 
 _softmax = F.softmax
 
@@ -118,6 +122,17 @@ def local_softmax(
         return _softmax(x.masked_fill(local_mask, -1e9), -1)
 
 
+@contextmanager
+def number_attention_layers(model: GPTNeoXModel) -> Iterator[GPTNeoXModel]:
+    try:
+        for i, layer in enumerate(model.layers):
+            layer.attention.layer_idx = i
+        yield model
+    finally:
+        for layer in model.layers:
+            del layer.attention.layer_idx
+
+
 original_attn = GPTNeoXAttention._attn
 
 
@@ -129,6 +144,7 @@ def sparse_attn(
     attention_mask: Optional[Tensor] = None,
     head_mask: Optional[Tensor] = None,
     use_v_mag: bool = False,
+    k_per_layer: Optional[List[int]] = None,
     **sa_args: Any
 ) -> Tuple[Tensor, Tensor]:
     if use_v_mag:
@@ -137,6 +153,12 @@ def sparse_attn(
         v_norm = value.norm(dim=-1).unsqueeze(dim=-2)
     else:
         v_norm = None
+    if k_per_layer is not None:
+        assert hasattr(self, "layer_idx"), (
+            "Attention object does not have layer_idx attribute,"
+            " wrap within number_attention_layers contextmanager beforehand."
+        )
+        sa_args["k"] = k_per_layer[self.layer_idx]
     with um.patch(
         "torch.nn.functional.softmax",
         partial(sparse_softmax_fixed_k, **sa_args, out_weights=v_norm),
