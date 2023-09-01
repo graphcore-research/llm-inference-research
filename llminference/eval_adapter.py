@@ -319,18 +319,20 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                 ctxs, max_context_length=max_context_length, dir_path=None
             )
 
-        # Left-pad the KV caches to maximum sequence length in batch
         seq_lens = [pkv.shape[-2] for pkv in cache]
         max_len = max(seq_lens)
+        # Right-pad the KV caches to maximum sequence length in batch
+        # (this ensures that the actual token position doesn't change between prefill
+        #  and generation, for techniques that want to aggregate "KV stats")
         past_key_values = torch.cat(
             [
-                pad(pkv, (0, 0, max_len - seq_len, 0))
+                pad(pkv, (0, 0, 0, max_len - seq_len))
                 for pkv, seq_len in zip(cache, seq_lens)
             ],
             dim=2,
         )
         attention_mask_left = torch.tensor(
-            [[i >= max_len - len for i in range(max_len)] for len in seq_lens]
+            [[i < len for i in range(max_len)] for len in seq_lens]
         ).long()
 
         # Tokenize prompts with left padding (easier generation)

@@ -1,3 +1,11 @@
+"""Sparse attention mechanisms.
+
+Note the following definitions:
+
+ - 'mask' is `True` or `1` for unmasked/retained tokens, `False` or `0` for
+   masked-out tokens
+ - `score` (often `x`) is near `finfo.min` for masked-out tokens
+"""
 import unittest.mock as um
 from contextlib import contextmanager
 from functools import partial
@@ -14,11 +22,42 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
 _softmax = F.softmax
 
 
+def score_to_mask(score: Tensor, threshold: float = 0.5) -> Tensor:
+    """Convert a score tensor to a mask.
+
+    threshold (float): how strict to be (values below `threshold*fmin` are considered
+    masked-out), between 0 and 1.
+
+    Returns: boolean 'mask' tensor, the same shape as `score`
+    """
+    return threshold * torch.finfo(score.dtype).min < score
+
+
+def causal_index(score: Tensor) -> Tensor:
+    """Get the 'causal index' of a tokens in history, from masked attention scores.
+
+    The causal index is the number of unmasked tokens between key token and
+    the query, counting backwards
+
+    Args:
+        score (Tensor): shape (*, q_len, k_len), should be set to -finfo.min
+        for masked-out values
+
+    Returns:
+        Tensor: shape (*, q_len, k_len), containing the caual index of each
+        token according to the mask, or -1 if the token is masked-out
+    """
+    mask = score_to_mask(score)
+    cumsum = mask.flip(-1).cumsum(-1).flip(-1)
+    return (cumsum - 1).masked_fill(~mask, -1)
+
+
 def sparse_softmax_fixed_k(
     x: Tensor,
     k: int,
     dim: int = -1,
     add_avg: bool = False,
+    apply_after_softmax: bool = True,
     out_weights: Optional[Tensor] = None,
 ) -> Tensor:
     """Applies softmax accross last dimension, keeping top k
@@ -30,6 +69,7 @@ def sparse_softmax_fixed_k(
         dim (int, optional): Assumed dim = -1
         add_avg (bool, optional): If True, assign the non-top-k
         softmax weight equally to non-top-k tokens.
+        apply_after_softmax (bool, optional): apply the top-k mask after softmax
         out_weights (Optional[Tensor], optional): shape (broadcastable to x)
         If passed, multiplies softmax scores with out_weights
         before choosing top-k.
@@ -38,21 +78,34 @@ def sparse_softmax_fixed_k(
         Tensor: shape (batch_size, num_heads, q_len, k_len)
     """
     assert dim == -1
+    assert not (
+        add_avg and not apply_after_softmax
+    ), "add_avg requires apply_after_softmax"
     if out_weights is None:
         out_weights = torch.tensor(1.0, dtype=x.dtype, device=x.device)
 
-    y = _softmax(x, dim=-1)
     if k >= x.shape[-1]:
-        return y
+        return _softmax(x, dim=-1)
 
-    y_weighted = y * out_weights
-    kth_val = -torch.kthvalue(-y_weighted, k, keepdim=True).values
+    score = x + torch.log(out_weights)
+    kth_val = -torch.kthvalue(-score, k, keepdim=True).values
+    mask = kth_val <= score
 
-    mask = y_weighted >= kth_val
-    out: Tensor = mask * y
+    if not apply_after_softmax:
+        return _softmax(x.masked_fill(~mask, torch.finfo(x.dtype).min), dim=-1)
+
+    y = _softmax(x, dim=-1)
+    y *= mask
     if add_avg:
-        out += ~mask * (1 - out.sum(dim=-1, keepdim=True)) / (out.shape[-1] - k)
-    return out
+        # '1' for tokens that were removed by the topk operation, which can
+        # receive the average reallocation
+        removed_by_topk = (~mask) & score_to_mask(x)
+        y += (
+            removed_by_topk
+            * (1 - y.sum(dim=-1, keepdim=True))
+            / removed_by_topk.sum(-1, keepdim=True)
+        )
+    return y
 
 
 def sparse_softmax_fixed_p(
@@ -90,17 +143,20 @@ def sparse_softmax_fixed_p(
 
 
 def local_softmax(
-    x: Tensor, context_len: int, apply_after_softmax: bool = True, dim: int = -1
+    x: Tensor,
+    context_len: int,
+    apply_after_softmax: bool = True,
+    dim: int = -1,
 ) -> Tensor:
     """Applies softmax across last dimension, keeping past context_len number
     of values in the output.
 
     Args:
         x (Tensor): shape (batch_size, num_heads, q_len, k_len)
-        context_len (int): Keep past context_len output scores (t-context_len : t)
+        context_len (int): Keep context_len past output scores (t-context_len : t)
         apply_after_softmax (bool, optional):
         If True, set corresponding softmax output elements to 0.
-        If False, mask corresponding inputs to softmax to -1e9.
+        If False, mask corresponding inputs to softmax to `finfo.min`.
         Defaults to True.
         dim (int, optional): Assumed dim = -1.
 
@@ -109,17 +165,10 @@ def local_softmax(
     """
     assert dim == -1
     assert len(x.shape) >= 2
-    q_len, k_len = x.shape[-2:]
-    local_mask = torch.tensor(
-        [
-            [(j <= i - context_len) for j in range(k_len)]
-            for i in range(k_len - q_len, k_len)
-        ]
-    )
+    local_mask = causal_index(x) < context_len
     if apply_after_softmax:
-        return _softmax(x, dim=-1) * local_mask.logical_not()
-    else:
-        return _softmax(x.masked_fill(local_mask, -1e9), -1)
+        return _softmax(x, dim=-1) * local_mask
+    return _softmax(x.masked_fill(~local_mask, torch.finfo(x.dtype).min), dim=-1)
 
 
 @contextmanager

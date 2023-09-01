@@ -8,6 +8,26 @@ from .. import sparse_attention as sa
 from ..eval_adapter import Adapter
 
 
+def test_causal_index() -> None:
+    m = torch.finfo(torch.float).min
+    mask = torch.tensor(
+        [
+            [m, 0, m, m],
+            [m, 0, 0, m],
+            [m, 0, 0, 0],
+        ]
+    )
+    expected = torch.tensor(
+        [
+            [-1, 0, -1, -1],
+            [-1, 1, 0, -1],
+            [-1, 2, 1, 0],
+        ]
+    )
+    assert torch.equal(expected, sa.causal_index(mask))
+    assert torch.equal(expected[None, None], sa.causal_index(mask[None, None]))
+
+
 def test_sparse_softmax_fixed_k() -> None:
     k = 2
     x = torch.tensor(
@@ -40,21 +60,32 @@ def test_sparse_softmax_fixed_k_large_k() -> None:
 
 def test_sparse_softmax_fixed_k_add_avg() -> None:
     k = 2
-    x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4])
+    m = torch.finfo(torch.float32).min
+    x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4, m])
     s = F.softmax(x, dim=-1)
     avg = (s[0] + s[1] + s[3]) / 3
-    expected = torch.tensor([avg, avg, s[2], avg, s[4]])
+    expected = torch.tensor([avg, avg, s[2], avg, s[4], 0])
     out = sa.sparse_softmax_fixed_k(x, k, add_avg=True)
     torch.testing.assert_close(out, expected)
 
 
 def test_sparse_softmax_fixed_k_out_weights() -> None:
     k = 2
-    x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4])
-    out_weights = torch.tensor([1.0, 100.0, 1.0, 1.0, 1.0])
+    m = torch.finfo(torch.float32).min
+    x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4, m])
+    out_weights = torch.tensor([1.0, 100.0, 1.0, 1.0, 1.0, 1.0])
     s = F.softmax(x, dim=-1)
-    expected = torch.tensor([0, s[1], s[2], 0, 0])
+    expected = torch.tensor([0, s[1], s[2], 0, 0, 0])
     out = sa.sparse_softmax_fixed_k(x, k, out_weights=out_weights)
+    torch.testing.assert_close(out, expected)
+
+
+def test_sparse_softmax_fixed_k_apply_before_softmax() -> None:
+    k = 2
+    m = torch.finfo(torch.float32).min
+    x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4, m])
+    expected = F.softmax(torch.tensor([m, m, 0.5, m, 0.4, m]), dim=-1)
+    out = sa.sparse_softmax_fixed_k(x, k, apply_after_softmax=False)
     torch.testing.assert_close(out, expected)
 
 
@@ -152,39 +183,35 @@ def test_sparse_softmax_fixed_p_k_min_large() -> None:
     torch.testing.assert_close(out, expected)
 
 
-def test_local_softmax_pre() -> None:
-    context_len = 2
+def test_local_softmax() -> None:
+    m = torch.finfo(torch.float32).min
     x = torch.tensor(
-        [[8, 0, 11, 13], [2, 5, 1, 6], [14, 12, 7, 10], [4, 15, 9, 3]],
-        dtype=torch.float32,
-    )
-    x_masked = torch.tensor(
-        [[8, 0, 11, 13], [2, 5, 1, 6], [-1e9, 12, 7, 10], [-1e9, -1e9, 9, 3]],
-        dtype=torch.float32,
-    )
-    expected = F.softmax(x_masked, dim=-1)
-    out = sa.local_softmax(x, context_len=context_len, apply_after_softmax=False)
-    torch.testing.assert_close(out, expected)
-
-
-def test_local_softmax_post() -> None:
-    context_len = 2
-    x = torch.tensor(
-        [[8, 0, 11, 13], [2, 5, 1, 6], [14, 12, 7, 10], [4, 15, 9, 3]],
-        dtype=torch.float32,
-    )
-    mask = torch.tensor(
         [
-            [False, False, False, False],
-            [False, False, False, False],
-            [True, False, False, False],
-            [True, True, False, False],
-        ]
+            [m, 8, m, m, m],
+            [m, 2, 5, m, m],
+            [m, 14, 12, 7, m],
+            [m, 4, 15, 9, 3],
+        ],
+        dtype=torch.float32,
     )
-
-    expected = torch.masked_fill(F.softmax(x, dim=-1), mask=mask, value=0.0)
-    out = sa.local_softmax(x, context_len=context_len, apply_after_softmax=True)
-    torch.testing.assert_close(out, expected)
+    context_len = 2
+    x_masked = torch.tensor(
+        [
+            [m, 8, m, m, m],
+            [m, 2, 5, m, m],
+            [m, m, 12, 7, m],
+            [m, m, m, 9, 3],
+        ],
+        dtype=torch.float32,
+    )
+    torch.testing.assert_close(
+        sa.local_softmax(x, context_len=context_len, apply_after_softmax=False),
+        F.softmax(x_masked, dim=-1),
+    )
+    torch.testing.assert_close(
+        sa.local_softmax(x, context_len=context_len, apply_after_softmax=True),
+        F.softmax(x, dim=-1) * (x_masked != m),
+    )
 
 
 def test_sparse_attn_vary_k_per_layer() -> None:
