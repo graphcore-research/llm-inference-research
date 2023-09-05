@@ -45,14 +45,20 @@ def test_prefill_with_cache() -> None:
     adapter.model.double()
     dir_path = "cache/"
     with um.patch("torch.save") as mock_save:
-        out = adapter.prefill_with_cache(s, max_context_length=64, dir_path=dir_path)
+        pkv, sequence_lens = adapter.prefill_with_cache(
+            s, max_context_length=64, dir_path=dir_path
+        )
     assert mock_save.call_count == 2
     for i, (call_args, ctx) in enumerate(zip(mock_save.call_args_list, s)):
         args = call_args.args
         inp = adapter.tokenizer(ctx, return_tensors="pt")
-        pkv = adapter._kv_to_tensor(adapter.model(**inp).past_key_values)
-        torch.testing.assert_close(out[i], pkv)
-        torch.testing.assert_close(args[0], pkv)
+        pkv_reference = adapter.model(**inp).past_key_values
+        assert sequence_lens[i] == inp["input_ids"].shape[1]
+        torch.testing.assert_close(
+            adapter._kv_to_tensor(pkv)[:, :, i, None, :, : sequence_lens[i], :],
+            adapter._kv_to_tensor(pkv_reference),
+        )
+        torch.testing.assert_close(args[0], adapter._kv_to_tensor(pkv_reference))
         assert args[1] == Path(dir_path, adapter._get_cache_str(ctx, 64) + ".pt")
 
 

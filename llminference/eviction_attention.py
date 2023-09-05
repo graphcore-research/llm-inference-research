@@ -182,6 +182,7 @@ def convert_gptneox(
         for name, child in m.named_children():
             if isinstance(child, GPTNeoXAttention):
                 replacement = GPTNeoXAttentionWithEviction(**args)
+                replacement.to(next(child.parameters()).dtype)
                 replacement.load_state_dict(child.state_dict())
                 setattr(m, name, replacement)
             _convert(child, **args)

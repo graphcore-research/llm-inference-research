@@ -70,11 +70,14 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
 
     @classmethod
     def from_pretrained(
-        cls, pretrained_model_name_or_path: str, batch_size: int = DEFAULT_BATCH_SIZE
+        cls,
+        pretrained_model_name_or_path: str,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        dtype: Optional[torch.dtype] = None,
     ) -> "Adapter":
         return cls.from_model(
             transformers.AutoModelForCausalLM.from_pretrained(
-                pretrained_model_name_or_path
+                pretrained_model_name_or_path, torch_dtype=dtype
             ),
             batch_size=batch_size,
         )
@@ -181,8 +184,8 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
     def _save_kv_cache(
         self,
         past_key_values: Tensor,
+        sequence_lens: Tensor,
         filepaths: List[Path],
-        sequence_lens: List[Optional[int]],
     ) -> None:
         """
         Given KV cache for a batch of sequences, save the cache for each sequence i
@@ -191,8 +194,8 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
 
         Args:
             past_key_values (Tensor): as returned by _kv_to_tensor
+            sequence_lens (Tensor): per-sequence sequence_length
             filepaths (List[Path]): per-sequence filepath
-            sequence_lens (List[Optional[int]]): per-sequence sequence_length
         """
         batch_size = past_key_values.shape[2]
         assert (
@@ -212,7 +215,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
 
     def prefill_with_cache(
         self, text: List[str], max_context_length: int, dir_path: Optional[str]
-    ) -> List[Tensor]:
+    ) -> Tuple[KVCache, Tensor]:
         """Given a batch of input strings, run the model and save
         the KV cache for each sequence individually.
         Note: uses right padding when batching.
@@ -224,8 +227,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             dir_path (Optional[str]): Directory for storing the KV cache
 
         Returns:
-            List[Tensor]: [batch_size x
-            (layer, 2, 1, num_heads, sequence_length, embed_size_per_head)]
+            (KVCache, Tensor): (kv cache, sequence lengths)
         """
         with self.tokenizer_override(padding="right", truncation="left"):
             enc = self.tokenizer(
@@ -239,8 +241,10 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         input_ids, attention_mask = enc["input_ids"], enc["attention_mask"]
 
         with torch.no_grad():
-            out = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        past_key_values = self._kv_to_tensor(out.past_key_values)
+            out = self.model(
+                input_ids=input_ids.to(self.model.device),
+                attention_mask=attention_mask.to(self.model.device),
+            )
 
         # Get the actual length of each sequence in the batch
         sequence_lens = attention_mask.sum(dim=-1).tolist()
@@ -251,12 +255,11 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                 Path(dir_path) / (self._get_cache_str(s, max_context_length) + ".pt")
                 for s in text
             ]
-            self._save_kv_cache(past_key_values, filepaths, sequence_lens)
+            self._save_kv_cache(
+                self._kv_to_tensor(out.past_key_values), sequence_lens, filepaths
+            )
 
-        return [
-            past_key_values[:, :, i : i + 1, :, :sequence_len, :]
-            for i, sequence_len in enumerate(sequence_lens)
-        ]
+        return out.past_key_values, sequence_lens
 
     def greedy_sample(
         self,
@@ -314,25 +317,28 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             cache_exists = [filepath.exists() for filepath in filepaths]
             assert all(cache_exists), "Issue generating KV cache"
             cache = [torch.load(filepath) for filepath in filepaths]
+            seq_lens = torch.tensor([pkv.shape[-2] for pkv in cache])
+            # Right-pad the KV caches (this ensures that the actual token
+            # position doesn't change between prefill and generation, for
+            # techniques that want to aggregate "KV stats")
+            pkv = torch.cat(
+                [
+                    pad(pkv, (0, 0, 0, max(seq_lens) - seq_len))
+                    for pkv, seq_len in zip(cache, seq_lens)
+                ],
+                dim=2,
+            ).to(self.model.device)
+            past_key_values = self._kv_to_tuple(pkv)
         else:
-            cache = self.prefill_with_cache(
+            past_key_values, seq_lens = self.prefill_with_cache(
                 ctxs, max_context_length=max_context_length, dir_path=None
             )
 
-        seq_lens = [pkv.shape[-2] for pkv in cache]
-        max_len = max(seq_lens)
-        # Right-pad the KV caches to maximum sequence length in batch
-        # (this ensures that the actual token position doesn't change between prefill
-        #  and generation, for techniques that want to aggregate "KV stats")
-        past_key_values = torch.cat(
-            [
-                pad(pkv, (0, 0, 0, max_len - seq_len))
-                for pkv, seq_len in zip(cache, seq_lens)
-            ],
-            dim=2,
-        )
         attention_mask_left = torch.tensor(
-            [[i < len for i in range(max_len)] for len in seq_lens]
+            [
+                [i < len for i in range(past_key_values[0][0].shape[-2])]
+                for len in seq_lens
+            ]
         ).long()
 
         # Tokenize prompts with left padding (easier generation)
@@ -362,7 +368,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         )
         position_ids.masked_fill_(position_ids < 0, 0)
 
-        # Concatanate cache and prompts attention masks
+        # Concatenate cache and prompts attention masks
         attention_mask = torch.cat([attention_mask_left, attention_mask_right], dim=1)
 
         # Generate tokens one by one
@@ -370,10 +376,10 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         with torch.no_grad(), generation_context(self.model) as model:
             for _ in range(num_generated_tokens):
                 out = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
+                    input_ids=input_ids.to(model.device),
+                    attention_mask=attention_mask.to(model.device),
                     past_key_values=past_key_values,
-                    position_ids=position_ids,
+                    position_ids=position_ids.to(model.device),
                 )
                 logits = out.logits[:, -1, :]
                 next_token = logits.argmax(dim=-1, keepdim=True)
