@@ -17,7 +17,7 @@ def test_datasets() -> None:
         data = cls.data(**kwargs)  # type:ignore[attr-defined]
         assert len(data) > 100
         assert set(data.features) == {
-            "question_id",
+            "id",
             "question",
             "answers",
             "context",
@@ -30,7 +30,7 @@ def test_datasets() -> None:
 
 def test_add_prompt() -> None:
     datum = dict(
-        question_id="#0",
+        id="#0",
         question="Dummy qu",
         context="Dummy context",
         answers=["A1", "A2"],
@@ -80,7 +80,7 @@ def test_evaluate() -> None:
         ["tank", "car"],
     ]
     examples = [
-        {"question_id": i, "context": ctx, "prompt": prompt, "answers": answers}
+        {"id": i, "context": ctx, "prompt": prompt, "answers": answers}
         for i, ctx, prompt, answers in zip(
             it.count(), example_ctxs, example_prompts, example_answers
         )
@@ -94,8 +94,8 @@ def test_evaluate() -> None:
 
     with um.patch.object(Adapter, "greedy_sample", mock_sample):
         assert list(qa.evaluate(adapter, examples, 2)) == [
-            dict(question_id=0, output="plane", match=True),
-            dict(question_id=1, output="boat", match=False),
-            dict(question_id=2, output="bicycle", match=True),
-            dict(question_id=3, output="car", match=True),
+            dict(id=0, output="plane", match=True),
+            dict(id=1, output="boat", match=False),
+            dict(id=2, output="bicycle", match=True),
+            dict(id=3, output="car", match=True),
         ]
