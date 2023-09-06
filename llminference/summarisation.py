@@ -22,10 +22,8 @@ import rouge_score.rouge_scorer
 from tqdm import tqdm
 
 from . import utility
-from .eval_adapter import Adapter, ModelContext, null_model_context
+from .eval_adapter import Adapter, ModelContext, null_model_context, DEFAULT_CACHE_DIR
 from .utility import AnyDict
-
-CACHE_DIR = "/net/group/research/lukar/cache/"
 
 
 class CnnDailymail:
@@ -62,15 +60,18 @@ class CnnDailymail:
         ).shuffle(shuffle_seed)
 
 
+DEFAULT_PROMPT = "\nSummary:"
+
+
 def evaluate(
     adapter: Adapter,
     examples: List[AnyDict],
     batch_size: int,
-    prompt: str = "\nSummary:",
+    prompt: str = DEFAULT_PROMPT,
     max_generated_tokens: int = 128,
     generation_context: ModelContext = null_model_context,
     use_cache: bool = True,
-    cache_dir: str = CACHE_DIR,
+    cache_dir: str = DEFAULT_CACHE_DIR,
     desc: Optional[str] = None,
 ) -> Iterable[AnyDict]:
     """Evaluate a generic summarisation task, comparing model output against
@@ -91,8 +92,7 @@ def evaluate(
         during generation.
         use_cache (bool, optional): Use cached context when sampling.
         Defaults to True.
-        cache_dir (str, optional): Context cache path.
-        Defaults to CACHE_DIR.
+        cache_dir (str, optional): Context cache path. Defaults to "cache".
         desc (str, optional): tqdm description
 
     Yields:
@@ -120,4 +120,6 @@ def evaluate(
                 id=b["id"],
                 output=output,
                 rougeL=scorer.score(b["reference"], output)["rougeL"].fmeasure,
+                prefill_length=len(adapter.tok_encode(b["context"] + prompt)),
+                reference_length=reference_length,
             )

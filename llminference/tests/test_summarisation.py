@@ -36,8 +36,28 @@ def test_evaluate() -> None:
         results = list(
             summarisation.evaluate(adapter, examples, batch_size=2, use_cache=False)
         )
+
+    prefill_lengths = [
+        len(adapter.tok_encode(examples[i]["context"] + summarisation.DEFAULT_PROMPT))
+        for i in range(len(examples))
+    ]
+    reference_lengths = [
+        len(adapter.tok_encode(examples[i]["reference"])) for i in range(len(examples))
+    ]
     # Note that the first output is truncated (to the tokenized length of 'reference')
     assert results == [
-        dict(id="1", output="rouge is french for red", rougeL=1.0),
-        dict(id="2", output="blah blah blah", rougeL=0.0),
+        dict(
+            id="1",
+            output="rouge is french for red",
+            rougeL=1.0,
+            prefill_length=prefill_lengths[0],
+            reference_length=reference_lengths[0],
+        ),
+        dict(
+            id="2",
+            output="blah blah blah",
+            rougeL=0.0,
+            prefill_length=prefill_lengths[1],
+            reference_length=reference_lengths[1],
+        ),
     ]

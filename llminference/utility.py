@@ -85,7 +85,7 @@ def run_multiprocess_sweep(
     settings: List[AnyDict],
     dest: Path,
     n_workers: int,
-    max_threads_per_worker: int = 16,
+    max_threads_per_worker: int = 32,
 ) -> None:
     """Run a sweep in worker processes, saving the results to a .jsonl file."""
     if dest.exists():

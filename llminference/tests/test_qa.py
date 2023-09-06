@@ -71,7 +71,7 @@ def test_evaluate_prediction() -> None:
 
 def test_evaluate() -> None:
     adapter = Adapter.from_pretrained("EleutherAI/pythia-70m")
-    example_ctxs = ["context"] * 4
+    example_ctxs = ["context "] * 4
     example_prompts = ["plane", "boat", "bicycle", "car"]
     example_answers = [
         ["plane", "jet plane"],
@@ -90,12 +90,17 @@ def test_evaluate() -> None:
         self: Adapter, ctxs_batch: List[str], prompts_batch: List[str], **kwargs: Any
     ) -> List[List[int]]:
         # Just return the prompt
+        assert all(c == "context " for c in ctxs_batch)
         return [self.tok_encode(q) for q in prompts_batch]
 
+    prefill_lengths = [
+        len(adapter.tok_encode(example_ctxs[i] + example_prompts[i]))
+        for i in range(len(examples))
+    ]
     with um.patch.object(Adapter, "greedy_sample", mock_sample):
         assert list(qa.evaluate(adapter, examples, 2)) == [
-            dict(id=0, output="plane", match=True),
-            dict(id=1, output="boat", match=False),
-            dict(id=2, output="bicycle", match=True),
-            dict(id=3, output="car", match=True),
+            dict(id=0, output="plane", match=True, prefill_length=prefill_lengths[0]),
+            dict(id=1, output="boat", match=False, prefill_length=prefill_lengths[1]),
+            dict(id=2, output="bicycle", match=True, prefill_length=prefill_lengths[2]),
+            dict(id=3, output="car", match=True, prefill_length=prefill_lengths[3]),
         ]

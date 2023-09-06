@@ -49,6 +49,9 @@ def patch_for_model(
     return model_context
 
 
+DEFAULT_CACHE_DIR = "cache"
+
+
 class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
     """A simplified adapter for lm_eval <-> HuggingFace."""
 
@@ -268,7 +271,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         num_generated_tokens: int,
         max_prompt_and_generated_tokens: int = 256,
         use_cache: bool = True,
-        cache_dir: str = "cache/",
+        cache_dir: str = DEFAULT_CACHE_DIR,
         generation_context: ModelContext = null_model_context,
     ) -> Tensor:
         """

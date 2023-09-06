@@ -25,7 +25,7 @@ import numpy as np
 import regex as re
 from tqdm import tqdm
 
-from .eval_adapter import Adapter, ModelContext, null_model_context
+from .eval_adapter import Adapter, ModelContext, null_model_context, DEFAULT_CACHE_DIR
 from .utility import AnyDict, batches, map_full_batch
 
 CACHE_DIR = "/net/group/research/lukar/cache/"
@@ -247,10 +247,10 @@ def evaluate(
     batch_size: int,
     output_token_limit: int = 30,
     output_spare_tokens: int = 5,
-    open_book: bool = False,
+    open_book: bool = True,
     generation_context: ModelContext = null_model_context,
     use_cache: bool = True,
-    cache_dir: str = CACHE_DIR,
+    cache_dir: str = DEFAULT_CACHE_DIR,
     desc: Optional[str] = None,
 ) -> Iterable[AnyDict]:
     """Evaluate a generic QA task consisting of a list of examples, each a
@@ -264,13 +264,12 @@ def evaluate(
         output_token_limit (int, optional): Defaults to 30.
         output_spare_tokens (int, optional): Defaults to 5.
         open_book (bool, optional): Prepend context to the prompt.
-        Defaults to False.
+        Defaults to True.
         generation_context (ModelContext, optional): Override model
         during generation.
         use_cache (bool, optional): Use cached context when sampling.
         Defaults to True.
-        cache_dir (str, optional): Context cache path.
-        Defaults to CACHE_DIR.
+        cache_dir (str, optional): Context cache path. Defaults to "cache".
         desc (str, optional): tqdm description
 
     Yields:
@@ -300,4 +299,9 @@ def evaluate(
                 id=x["id"],
                 output=output,
                 match=evaluate_prediction(output, x["answers"]),
+                prefill_length=len(
+                    adapter.tok_encode(
+                        (x["context"] if open_book else "\n") + x["prompt"]
+                    )
+                ),
             )
