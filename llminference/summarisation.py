@@ -22,7 +22,7 @@ import rouge_score.rouge_scorer
 from tqdm import tqdm
 
 from . import utility
-from .eval_adapter import Adapter, ModelContext, null_model_context, DEFAULT_CACHE_DIR
+from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext, null_model_context
 from .utility import AnyDict
 
 

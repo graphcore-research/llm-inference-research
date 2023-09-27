@@ -25,7 +25,7 @@ import numpy as np
 import regex as re
 from tqdm import tqdm
 
-from .eval_adapter import Adapter, ModelContext, null_model_context, DEFAULT_CACHE_DIR
+from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext, null_model_context
 from .utility import AnyDict, batches, map_full_batch
 
 CACHE_DIR = "/net/group/research/lukar/cache/"
