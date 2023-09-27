@@ -8,8 +8,14 @@ from .. import sparse_attention as sa
 from ..eval_adapter import Adapter
 
 
+# Note: these tests use `finfo(float16).min` for masking, even though they are
+# run with float32 inputs. This matches gpt_neox's masking behaviour (the softmax
+# is always run in float32, but the mask uses finfo(float16).min when the model
+# is in half precision.)
+
+
 def test_causal_index() -> None:
-    m = torch.finfo(torch.float).min
+    m = torch.finfo(torch.float16).min
     mask = torch.tensor(
         [
             [m, 0, m, m],
@@ -60,7 +66,7 @@ def test_sparse_softmax_fixed_k_large_k() -> None:
 
 def test_sparse_softmax_fixed_k_add_avg() -> None:
     k = 2
-    m = torch.finfo(torch.float32).min
+    m = torch.finfo(torch.float16).min
     x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4, m])
     s = F.softmax(x, dim=-1)
     avg = (s[0] + s[1] + s[3]) / 3
@@ -71,7 +77,7 @@ def test_sparse_softmax_fixed_k_add_avg() -> None:
 
 def test_sparse_softmax_fixed_k_out_weights() -> None:
     k = 2
-    m = torch.finfo(torch.float32).min
+    m = torch.finfo(torch.float16).min
     x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4, m])
     out_weights = torch.tensor([1.0, 100.0, 1.0, 1.0, 1.0, 1.0])
     s = F.softmax(x, dim=-1)
@@ -82,7 +88,7 @@ def test_sparse_softmax_fixed_k_out_weights() -> None:
 
 def test_sparse_softmax_fixed_k_apply_before_softmax() -> None:
     k = 2
-    m = torch.finfo(torch.float32).min
+    m = torch.finfo(torch.float16).min
     x = torch.tensor([0.3, 0.1, 0.5, 0.2, 0.4, m])
     expected = F.softmax(torch.tensor([m, m, 0.5, m, 0.4, m]), dim=-1)
     out = sa.sparse_softmax_fixed_k(x, k, apply_after_softmax=False)
@@ -184,7 +190,7 @@ def test_sparse_softmax_fixed_p_k_min_large() -> None:
 
 
 def test_local_softmax() -> None:
-    m = torch.finfo(torch.float32).min
+    m = torch.finfo(torch.float16).min
     x = torch.tensor(
         [
             [m, 8, m, m, m],

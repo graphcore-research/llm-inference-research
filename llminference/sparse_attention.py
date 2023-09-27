@@ -4,7 +4,7 @@ Note the following definitions:
 
  - 'mask' is `True` or `1` for unmasked/retained tokens, `False` or `0` for
    masked-out tokens
- - `score` (often `x`) is near `finfo.min` for masked-out tokens
+ - `score` (often `x`) is near `FP16_MIN` for masked-out tokens
 """
 import unittest.mock as um
 from contextlib import contextmanager
@@ -25,12 +25,12 @@ _softmax = F.softmax
 def score_to_mask(score: Tensor, threshold: float = 0.5) -> Tensor:
     """Convert a score tensor to a mask.
 
-    threshold (float): how strict to be (values below `threshold*fmin` are considered
-    masked-out), between 0 and 1.
+    threshold (float): how strict to be (values below `threshold*FP16_MIN` are
+    considered masked-out); between 0 and 1.
 
     Returns: boolean 'mask' tensor, the same shape as `score`
     """
-    return threshold * torch.finfo(score.dtype).min < score
+    return threshold * torch.finfo(torch.float16).min < score
 
 
 def causal_index(score: Tensor) -> Tensor:
