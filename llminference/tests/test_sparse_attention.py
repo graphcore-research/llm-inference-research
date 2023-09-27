@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from .. import sparse_attention as sa
 from ..eval_adapter import Adapter
 
-
 # Note: these tests use `finfo(float16).min` for masking, even though they are
 # run with float32 inputs. This matches gpt_neox's masking behaviour (the softmax
 # is always run in float32, but the mask uses finfo(float16).min when the model
