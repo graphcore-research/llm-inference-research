@@ -1,0 +1,10 @@
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"clustering","k":64.0,"match":0.0075}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"clustering","k":128.0,"match":0.0575}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"clustering","k":256.0,"match":0.0825}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"clustering","k":512.0,"match":0.1525}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"eviction","k":64.0,"match":0.065}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"eviction","k":128.0,"match":0.1175}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"eviction","k":256.0,"match":0.1425}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"eviction","k":512.0,"match":0.2025}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"eviction","k":1024.0,"match":0.2775}
+{"dataset":"squad","shots":1,"model_scale":"1b","sparsity":"none","k":null,"match":0.375}
