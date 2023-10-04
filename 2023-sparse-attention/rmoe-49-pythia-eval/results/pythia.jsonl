@@ -1,0 +1,48 @@
+{"model": "pythia-70m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.0125, "pe": true, "open_book": false, "n_examples": 400, "_duration": 40.944880962371826}
+{"model": "pythia-70m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.01, "pe": false, "open_book": false, "n_examples": 400, "_duration": 36.450438261032104}
+{"model": "pythia-70m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.0225, "pe": true, "open_book": true, "n_examples": 400, "_duration": 363.356388092041}
+{"model": "pythia-70m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.0125, "pe": false, "open_book": true, "n_examples": 400, "_duration": 369.2916519641876}
+{"model": "pythia-70m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.0125, "pe": true, "open_book": false, "n_examples": 400, "_duration": 41.16551637649536}
+{"model": "pythia-70m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.0075, "pe": false, "open_book": false, "n_examples": 400, "_duration": 42.29364013671875}
+{"model": "pythia-70m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.03, "pe": true, "open_book": true, "n_examples": 400, "_duration": 372.01337695121765}
+{"model": "pythia-70m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.0225, "pe": false, "open_book": true, "n_examples": 400, "_duration": 389.60783338546753}
+{"model": "pythia-160m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.0275, "pe": true, "open_book": false, "n_examples": 400, "_duration": 93.39510822296143}
+{"model": "pythia-160m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.015, "pe": false, "open_book": false, "n_examples": 400, "_duration": 86.06089615821838}
+{"model": "pythia-160m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.11, "pe": true, "open_book": true, "n_examples": 400, "_duration": 1075.8507735729218}
+{"model": "pythia-160m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.09, "pe": false, "open_book": true, "n_examples": 400, "_duration": 1048.4303848743439}
+{"model": "pythia-160m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.035, "pe": true, "open_book": false, "n_examples": 400, "_duration": 73.03694653511047}
+{"model": "pythia-160m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.0225, "pe": false, "open_book": false, "n_examples": 400, "_duration": 81.58813619613647}
+{"model": "pythia-160m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.1025, "pe": true, "open_book": true, "n_examples": 400, "_duration": 1058.893952846527}
+{"model": "pythia-160m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.075, "pe": false, "open_book": true, "n_examples": 400, "_duration": 1062.4229652881622}
+{"model": "pythia-410m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.0575, "pe": true, "open_book": false, "n_examples": 400, "_duration": 184.61845207214355}
+{"model": "pythia-410m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.0475, "pe": false, "open_book": false, "n_examples": 400, "_duration": 205.06518173217773}
+{"model": "pythia-410m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.265, "pe": true, "open_book": true, "n_examples": 400, "_duration": 2596.4313101768494}
+{"model": "pythia-410m", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.2425, "pe": false, "open_book": true, "n_examples": 400, "_duration": 2643.3427703380585}
+{"model": "pythia-410m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.0675, "pe": true, "open_book": false, "n_examples": 400, "_duration": 182.51963591575623}
+{"model": "pythia-410m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.0625, "pe": false, "open_book": false, "n_examples": 400, "_duration": 188.06166768074036}
+{"model": "pythia-410m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.335, "pe": true, "open_book": true, "n_examples": 400, "_duration": 2617.2443232536316}
+{"model": "pythia-410m", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.32, "pe": false, "open_book": true, "n_examples": 400, "_duration": 2537.9939539432526}
+{"model": "pythia-1b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.0925, "pe": true, "open_book": false, "n_examples": 400, "_duration": 354.3340799808502}
+{"model": "pythia-1b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.0775, "pe": false, "open_book": false, "n_examples": 400, "_duration": 361.7107219696045}
+{"model": "pythia-1b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.3775, "pe": true, "open_book": true, "n_examples": 400, "_duration": 2900.2684552669525}
+{"model": "pythia-1b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.33, "pe": false, "open_book": true, "n_examples": 400, "_duration": 2865.7647483348846}
+{"model": "pythia-1b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.1025, "pe": true, "open_book": false, "n_examples": 400, "_duration": 327.9580006599426}
+{"model": "pythia-1b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.1, "pe": false, "open_book": false, "n_examples": 400, "_duration": 323.85270619392395}
+{"model": "pythia-1b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.4275, "pe": true, "open_book": true, "n_examples": 400, "_duration": 2833.500871181488}
+{"model": "pythia-1b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.4175, "pe": false, "open_book": true, "n_examples": 400, "_duration": 2791.821362257004}
+{"model": "pythia-1.4b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.145, "pe": true, "open_book": false, "n_examples": 400, "_duration": 451.0956594944}
+{"model": "pythia-1.4b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.115, "pe": false, "open_book": false, "n_examples": 400, "_duration": 459.250638961792}
+{"model": "pythia-1.4b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.38, "pe": true, "open_book": true, "n_examples": 400, "_duration": 4805.568584442139}
+{"model": "pythia-1.4b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.3475, "pe": false, "open_book": true, "n_examples": 400, "_duration": 4643.930413007736}
+{"model": "pythia-1.4b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.175, "pe": true, "open_book": false, "n_examples": 400, "_duration": 425.8892939090729}
+{"model": "pythia-1.4b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.1725, "pe": false, "open_book": false, "n_examples": 400, "_duration": 453.9060504436493}
+{"model": "pythia-1.4b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.485, "pe": true, "open_book": true, "n_examples": 400, "_duration": 4675.595117807388}
+{"model": "pythia-1.4b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.4775, "pe": false, "open_book": true, "n_examples": 400, "_duration": 4735.836699008942}
+{"model": "pythia-2.8b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.155, "pe": true, "open_book": false, "n_examples": 400, "_duration": 702.6639513969421}
+{"model": "pythia-2.8b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.1275, "pe": false, "open_book": false, "n_examples": 400, "_duration": 686.4279425144196}
+{"model": "pythia-2.8b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.425, "pe": true, "open_book": true, "n_examples": 400, "_duration": 9386.377005577087}
+{"model": "pythia-2.8b", "prompt": "\nQuestion: {question}\nAnswer:", "acc": 0.39, "pe": false, "open_book": true, "n_examples": 400, "_duration": 9179.52447104454}
+{"model": "pythia-2.8b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.2075, "pe": true, "open_book": false, "n_examples": 400, "_duration": 660.6990628242493}
+{"model": "pythia-2.8b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.1975, "pe": false, "open_book": false, "n_examples": 400, "_duration": 685.4703159332275}
+{"model": "pythia-2.8b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.5, "pe": true, "open_book": true, "n_examples": 400, "_duration": 9286.54760980606}
+{"model": "pythia-2.8b", "prompt": "\nQuestion: {question}\nSingle-word answer:", "acc": 0.4925, "pe": false, "open_book": true, "n_examples": 400, "_duration": 9349.870923042297}

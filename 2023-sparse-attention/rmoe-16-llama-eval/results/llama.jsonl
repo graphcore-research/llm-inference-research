@@ -1,0 +1,4 @@
+{"model": "Llama-2-7b-hf", "acc": 0.635, "open_book": false, "_duration": 2529.0659651756287}
+{"model": "Llama-2-7b-hf", "acc": 0.745, "open_book": true, "_duration": 14715.352314472198}
+{"model": "Llama-2-7b-hf", "acc": 0.625, "open_book": false, "_duration": 1331.7463579177856}
+{"model": "Llama-2-7b-hf", "acc": 0.7575, "open_book": true, "_duration": 14770.806126594543}
