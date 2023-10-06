@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 import struct
 import unittest.mock as um
 from contextlib import contextmanager
@@ -49,7 +50,7 @@ def patch_for_model(
     return model_context
 
 
-DEFAULT_CACHE_DIR = "cache"
+DEFAULT_CACHE_DIR = f"/net/group/research/{os.environ.get('USER')}/cache"
 
 
 class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
@@ -270,9 +271,10 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         prompts: List[str],
         num_generated_tokens: int,
         max_prompt_and_generated_tokens: int = 256,
-        use_cache: bool = True,
+        use_cache: bool = False,
         cache_dir: str = DEFAULT_CACHE_DIR,
-        generation_context: ModelContext = null_model_context,
+        generation_context: Optional[ModelContext] = None,
+        combine_context_and_prompt: bool = True,
     ) -> Tensor:
         """
         Sample greedily from the model assuming the prompts are ctx + prompt,
@@ -288,6 +290,13 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             If not, first generate and save the cache. Defaults to True.
             cache_dir (str, optional): Directory for saving/loading KV cache.
             Defaults to "cache/".
+            generation_context (ModelContext, optional): A contextmanager function
+            that accepts and yields a PreTrainedModel, used during generation only,
+            for each batch being processed (for example to enable certain behaviours
+            or reset state between batches). If not specified, looks for a generation
+            context in self.model.generation_context.
+            combine_context_and_prompt (bool, optional): Combine the context &
+            prompt into a single prefill string. Not compatible with `use_cache`.
 
         Returns:
             Tensor: Generated tokens. Shape - (batch_size, num_generated_tokens)
@@ -298,91 +307,120 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         ), "Number of context and prompt strings should be the same"
         max_context_length = self.max_length - max_prompt_and_generated_tokens
 
-        if use_cache:
-            filepaths = [
-                Path(cache_dir) / (self._get_cache_str(ctx, max_context_length) + ".pt")
-                for ctx in ctxs
-            ]
-            cache_exists = [filepath.exists() for filepath in filepaths]
-
-            # Generate KV cache where missing
-            if not all(cache_exists):
-                ctxs_to_cache = [
-                    ctx for ctx, exist in zip(ctxs, cache_exists) if not exist
+        if combine_context_and_prompt:
+            assert not use_cache, "cannot combine_context_and_prompt and use_cache"
+            with self.tokenizer_override(padding="left", truncation="left"):
+                enc = self.tokenizer(
+                    [c + p for c, p in zip(ctxs, prompts)],
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=max_context_length,
+                )
+            input_ids = enc["input_ids"]
+            attention_mask = enc["attention_mask"]
+            past_key_values = None
+            position_ids = None
+        else:
+            if use_cache:
+                filepaths = [
+                    Path(cache_dir)
+                    / (self._get_cache_str(ctx, max_context_length) + ".pt")
+                    for ctx in ctxs
                 ]
-                self.prefill_with_cache(
-                    ctxs_to_cache,
-                    max_context_length=max_context_length,
-                    dir_path=cache_dir,
+                cache_exists = [filepath.exists() for filepath in filepaths]
+
+                # Generate KV cache where missing
+                if not all(cache_exists):
+                    ctxs_to_cache = [
+                        ctx for ctx, exist in zip(ctxs, cache_exists) if not exist
+                    ]
+                    self.prefill_with_cache(
+                        ctxs_to_cache,
+                        max_context_length=max_context_length,
+                        dir_path=cache_dir,
+                    )
+
+                # All KV caches should be available now
+                cache_exists = [filepath.exists() for filepath in filepaths]
+                assert all(cache_exists), "Issue generating KV cache"
+                cache = [torch.load(filepath) for filepath in filepaths]
+                seq_lens = torch.tensor([pkv.shape[-2] for pkv in cache])
+                # Right-pad the KV caches (this ensures that the actual token
+                # position doesn't change between prefill and generation, for
+                # techniques that want to aggregate "KV stats")
+                pkv = torch.cat(
+                    [
+                        pad(pkv, (0, 0, 0, max(seq_lens) - seq_len))
+                        for pkv, seq_len in zip(cache, seq_lens)
+                    ],
+                    dim=2,
+                ).to(self.model.device)
+                past_key_values = self._kv_to_tuple(pkv)
+            else:
+                past_key_values, seq_lens = self.prefill_with_cache(
+                    ctxs, max_context_length=max_context_length, dir_path=None
                 )
 
-            # All KV caches should be available now
-            cache_exists = [filepath.exists() for filepath in filepaths]
-            assert all(cache_exists), "Issue generating KV cache"
-            cache = [torch.load(filepath) for filepath in filepaths]
-            seq_lens = torch.tensor([pkv.shape[-2] for pkv in cache])
-            # Right-pad the KV caches (this ensures that the actual token
-            # position doesn't change between prefill and generation, for
-            # techniques that want to aggregate "KV stats")
-            pkv = torch.cat(
+            attention_mask_left = torch.tensor(
                 [
-                    pad(pkv, (0, 0, 0, max(seq_lens) - seq_len))
-                    for pkv, seq_len in zip(cache, seq_lens)
-                ],
-                dim=2,
+                    [i < len for i in range(past_key_values[0][0].shape[-2])]
+                    for len in seq_lens
+                ]
+            ).long()
+
+            # Tokenize prompts with left padding (easier generation)
+            with self.tokenizer_override(padding="left", truncation="left"):
+                prompts_enc = self.tokenizer(
+                    prompts, return_tensors="pt", padding=True, truncation=False
+                )
+
+            input_ids = prompts_enc["input_ids"]
+            attention_mask_right = prompts_enc["attention_mask"]
+            if (
+                max_prompt_and_generated_tokens
+                < input_ids.shape[1] + num_generated_tokens
+            ):
+                logger.warning(
+                    "length of prompt (%d) + generation (%d)"
+                    " is more than reserved (%d)",
+                    input_ids.shape[1],
+                    num_generated_tokens,
+                    max_prompt_and_generated_tokens,
+                )
+
+            # Apply correct position ids given padding tokens
+            q_len = input_ids.shape[-1]
+            q_no_pad_lens = attention_mask_right.sum(dim=-1)
+            position_ids = torch.stack(
+                [
+                    torch.arange(
+                        seq_len - (q_len - q_no_pad_len), seq_len + q_no_pad_len
+                    )
+                    for seq_len, q_no_pad_len in zip(seq_lens, q_no_pad_lens)
+                ]
             ).to(self.model.device)
-            past_key_values = self._kv_to_tuple(pkv)
-        else:
-            past_key_values, seq_lens = self.prefill_with_cache(
-                ctxs, max_context_length=max_context_length, dir_path=None
+            position_ids.masked_fill_(position_ids < 0, 0)
+
+            # Concatenate cache and prompts attention masks
+            attention_mask = torch.cat(
+                [attention_mask_left, attention_mask_right], dim=1
             )
-
-        attention_mask_left = torch.tensor(
-            [
-                [i < len for i in range(past_key_values[0][0].shape[-2])]
-                for len in seq_lens
-            ]
-        ).long()
-
-        # Tokenize prompts with left padding (easier generation)
-        with self.tokenizer_override(padding="left", truncation="left"):
-            prompts_enc = self.tokenizer(
-                prompts, return_tensors="pt", padding=True, truncation=False
-            )
-
-        input_ids = prompts_enc["input_ids"]
-        attention_mask_right = prompts_enc["attention_mask"]
-        if max_prompt_and_generated_tokens < input_ids.shape[1] + num_generated_tokens:
-            logger.warning(
-                "length of prompt (%d) + generation (%d) is more than reserved (%d)",
-                input_ids.shape[1],
-                num_generated_tokens,
-                max_prompt_and_generated_tokens,
-            )
-
-        # Apply correct position ids given padding tokens
-        q_len = input_ids.shape[-1]
-        q_no_pad_lens = attention_mask_right.sum(dim=-1)
-        position_ids = torch.stack(
-            [
-                torch.arange(seq_len - (q_len - q_no_pad_len), seq_len + q_no_pad_len)
-                for seq_len, q_no_pad_len in zip(seq_lens, q_no_pad_lens)
-            ]
-        )
-        position_ids.masked_fill_(position_ids < 0, 0)
-
-        # Concatenate cache and prompts attention masks
-        attention_mask = torch.cat([attention_mask_left, attention_mask_right], dim=1)
 
         # Generate tokens one by one
         generated_tokens = []
-        with torch.no_grad(), generation_context(self.model) as model:
+        context = (
+            generation_context
+            or getattr(self.model, "generation_context", None)
+            or null_model_context
+        )
+        with torch.no_grad(), context(self.model) as model:
             for _ in range(num_generated_tokens):
                 out = model(
                     input_ids=input_ids.to(model.device),
                     attention_mask=attention_mask.to(model.device),
                     past_key_values=past_key_values,
-                    position_ids=position_ids.to(model.device),
+                    position_ids=position_ids,
                 )
                 logits = out.logits[:, -1, :]
                 next_token = logits.argmax(dim=-1, keepdim=True)

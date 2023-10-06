@@ -9,7 +9,7 @@ Note the following definitions:
 import unittest.mock as um
 from contextlib import contextmanager
 from functools import partial
-from typing import Any, Iterator, List, Optional, Tuple, cast
+from typing import Any, Iterator, List, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -20,6 +20,17 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
 )
 
 _softmax = F.softmax
+
+
+def topk_mask(x: Tensor, k: int, dim: int = -1) -> Tensor:
+    """Mask selecting top-k positions along a dimension of `x` (default: last).
+
+    Ties are broken arbitarily, enforcing the constraint
+    `(out.sum(-1) <= k).all()`
+    """
+    fmin = torch.finfo(x.dtype).min
+    topk_idxs = x.nan_to_num(fmin).topk(k, dim).indices
+    return torch.zeros_like(x, dtype=torch.bool).scatter(dim, topk_idxs, 1)
 
 
 def score_to_mask(score: Tensor, threshold: float = 0.5) -> Tensor:
@@ -59,6 +70,7 @@ def sparse_softmax_fixed_k(
     add_avg: bool = False,
     apply_after_softmax: bool = True,
     out_weights: Optional[Tensor] = None,
+    generation_only: bool = True,
 ) -> Tensor:
     """Applies softmax accross last dimension, keeping top k
     elements of the output.
@@ -73,6 +85,8 @@ def sparse_softmax_fixed_k(
         out_weights (Optional[Tensor], optional): shape (broadcastable to x)
         If passed, multiplies softmax scores with out_weights
         before choosing top-k.
+        generation_only (bool, optional): only apply the sparse softmax when
+        x.shape[-2] == 1 (causal generation)
 
     Returns:
         Tensor: shape (batch_size, num_heads, q_len, k_len)
@@ -84,12 +98,10 @@ def sparse_softmax_fixed_k(
     if out_weights is None:
         out_weights = torch.tensor(1.0, dtype=x.dtype, device=x.device)
 
-    if k >= x.shape[-1]:
+    if k >= x.shape[-1] or (generation_only and x.shape[-2] != 1):
         return _softmax(x, dim=-1)
 
-    score = x + torch.log(out_weights)
-    kth_val = -torch.kthvalue(-score, k, keepdim=True).values
-    mask = kth_val <= score
+    mask = topk_mask(x + torch.log(out_weights), k)
 
     if not apply_after_softmax:
         return _softmax(x.masked_fill(~mask, torch.finfo(x.dtype).min), dim=-1)
@@ -131,15 +143,17 @@ def sparse_softmax_fixed_p(
     if k_min >= x.shape[-1]:
         return y
 
-    k = (torch.arange(start=k_len - q_len + 1, end=k_len + 1) * p).long()
-    k[k < k_min] = k_min
-    topk_vals = torch.topk(y, int(k[-1].item()), dim=-1).values
-    index = k.unsqueeze(-1)
-    for _ in range(len(x.shape) - 2):
-        index = index.unsqueeze(0)
-    index = index.expand(*x.shape[:-2], -1, -1)
-    kth_vals = topk_vals.gather(dim=-1, index=index - 1)
-    return cast(Tensor, (y >= kth_vals) * y)
+    # For each query, take `kn` (shape: (q_len,)) keys
+    kn = torch.maximum(
+        torch.tensor(k_min),
+        (p * torch.arange(start=k_len - q_len + 1, end=k_len + 1)).long(),
+    )
+    # Take a topk based on the max kn, then mask before scattering to obey kn
+    knmax = int(kn[-1].item())
+    topk = torch.topk(y, knmax, dim=-1)
+    return torch.zeros_like(y).scatter(
+        -1, topk.indices, topk.values * (torch.arange(knmax) < kn[:, None])
+    )
 
 
 def local_softmax(

@@ -1,6 +1,7 @@
 from . import (  # noqa: F401
     eval_adapter,
     eviction_attention,
+    experiments,
     outcompare,
     qa,
     quantisation,

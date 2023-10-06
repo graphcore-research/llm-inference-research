@@ -46,6 +46,7 @@ def test_eviction_neox() -> None:
         [prompt],
         num_generated_tokens=4,
         use_cache=False,
+        combine_context_and_prompt=False,
         generation_context=partial(ea.generation_context, keep_history=True),
     )
 

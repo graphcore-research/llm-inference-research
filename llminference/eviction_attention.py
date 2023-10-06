@@ -97,10 +97,9 @@ class Eviction:
         total_score += finfo.min * ~self.mask[..., :context_len]  # dead KVs
 
         # Update the mask
-        threshold = -torch.kthvalue(
-            -total_score, k=min(context_len, self.settings.k), dim=-1, keepdim=True
-        ).values
-        self.mask[..., :context_len] &= threshold <= total_score
+        self.mask[..., :context_len] &= sparse_attention.topk_mask(
+            total_score, min(context_len, self.settings.k)
+        )
 
 
 class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
@@ -189,4 +188,5 @@ def convert_gptneox(
 
     model = copy.deepcopy(model)
     _convert(model, config=model.config, settings=settings)
+    model.generation_context = generation_context
     return model

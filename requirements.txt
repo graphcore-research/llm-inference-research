@@ -16,3 +16,4 @@ transformers==4.32.1
 types-regex
 types-setuptools
 types-tqdm
+wandb

@@ -25,10 +25,8 @@ import numpy as np
 import regex as re
 from tqdm import tqdm
 
-from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext, null_model_context
+from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext
 from .utility import AnyDict, batches, map_full_batch
-
-CACHE_DIR = "/net/group/research/lukar/cache/"
 
 
 class TriviaQA:
@@ -175,15 +173,17 @@ class SQuAD:
         ).shuffle(shuffle_seed)
 
 
-DEFAULT_ZERO_SHOT_PROMPT = "\nQuestion: {question}\nSingle-word answer:"
-DEFAULT_FEW_SHOT_PROMPT = "\nQuestion: {question}\nAnswer:"
+def get_default_prompt_template(config_name_or_path: str, shots: int) -> str:
+    """Get a default prompt template for this model class & k-shot evaluation."""
+    if shots == 0 and ("pythia" in config_name_or_path):
+        # This prompt performed better for Pythia, preventing it from returning
+        # unmatched outputs such as "the answer is <correct answer>"
+        return "Question: {question}\nSingle-word answer:"
+    return "Question: {question}\nAnswer:"
 
 
 def add_few_shot_prompt(
-    datum: AnyDict,
-    k: int,
-    prompt_template: Optional[str] = None,
-    answer_template: str = " {answer}",
+    datum: AnyDict, k: int, prompt_template: str, answer_template: str = " {answer}"
 ) -> AnyDict:
     """Add a key "prompt" to the returned dictionary, following `prompt_template`.
 
@@ -194,18 +194,13 @@ def add_few_shot_prompt(
              "answers": List[str],
              "examples": List[{"question": str, "answers": [str]}]}
         k (int): Number of k-shot examples to provide.
-        prompt_template (str): String template e.g. "Q: {question}, A:". Default:
-        (DEFAULT_ZERO_SHOT_PROMPT if k == 0 else DEFAULT_FEW_SHOT_PROMPT).
+        prompt_template (str): String template e.g. "Q: {question}, A:".
         answer_template (str): String template e.g. " {answer}", used for k-shot
         examples only.
 
     Returns:
         {**datum, "prompt": str}: As `datum` but with a formatted "prompt".
     """
-    if prompt_template is None:
-        prompt_template = (
-            DEFAULT_ZERO_SHOT_PROMPT if k == 0 else DEFAULT_FEW_SHOT_PROMPT
-        )
     examples = datum.get("examples", [])
     if len(examples) < k:
         raise ValueError(
@@ -223,22 +218,18 @@ def add_few_shot_prompt(
     return dict(**datum, prompt=prompt)
 
 
-def add_zero_shot_prompt(
-    datum: AnyDict, prompt_template: Optional[str] = None
-) -> AnyDict:
-    """Add a key "prompt" to the returned dictionary, following `prompt_template`."""
-    return add_few_shot_prompt(
-        datum, k=0, prompt_template=prompt_template, answer_template=""
-    )
+# Strip leading & trailing space/punctuation, and leading "the " etc.
+EVALUATE_NORMALISATION_PATTERN = re.compile(
+    r"""^[\s\n"'_.,]*(the |a |an )?|[\s\n"'_.,]*$""",
+)
 
 
-def evaluate_prediction(
-    out: str,
-    answers: List[str],
-    leading_space_pattern: str = r"""^[\s"']+""",
-) -> bool:
-    out = re.sub(leading_space_pattern, "", out)
-    return any(out.lower().startswith(answer.lower()) for answer in answers)
+def evaluate_prediction(out: str, answers: List[str]) -> bool:
+    norm_out = re.sub(EVALUATE_NORMALISATION_PATTERN, "", out.lower())
+    norm_answers = [
+        re.sub(EVALUATE_NORMALISATION_PATTERN, "", answer.lower()) for answer in answers
+    ]
+    return any(norm_out.startswith(answer) for answer in norm_answers if answer)
 
 
 def evaluate(
@@ -248,9 +239,10 @@ def evaluate(
     output_token_limit: int = 30,
     output_spare_tokens: int = 5,
     open_book: bool = True,
-    generation_context: ModelContext = null_model_context,
-    use_cache: bool = True,
+    generation_context: Optional[ModelContext] = None,
+    use_cache: bool = False,
     cache_dir: str = DEFAULT_CACHE_DIR,
+    combine_context_and_prompt: bool = True,
     desc: Optional[str] = None,
 ) -> Iterable[AnyDict]:
     """Evaluate a generic QA task consisting of a list of examples, each a
@@ -284,7 +276,7 @@ def evaluate(
             len(adapter.tok_encode(a)) for x in batch for a in x["answers"]
         )
         out_ids_batch = adapter.greedy_sample(
-            [x["context"] if open_book else "\n" for x in batch],
+            [x["context"] + "\n" if open_book else "" for x in batch],
             [x["prompt"] for x in batch],
             num_generated_tokens=min(
                 output_token_limit, output_spare_tokens + max_answer_tokens
@@ -292,6 +284,7 @@ def evaluate(
             generation_context=generation_context,
             use_cache=use_cache and open_book,
             cache_dir=cache_dir,
+            combine_context_and_prompt=combine_context_and_prompt,
         )
         for x, ids in zip(batch, out_ids_batch):
             output = adapter.tok_decode(ids)

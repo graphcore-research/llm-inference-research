@@ -40,7 +40,7 @@ def test_add_prompt() -> None:
         ],
     )
     # Zero shot
-    example = qa.add_zero_shot_prompt(datum, "\nQ: {question}\nA:")
+    example = qa.add_few_shot_prompt(datum, k=0, prompt_template="\nQ: {question}\nA:")
     assert example.pop("prompt") == "\nQ: Dummy qu\nA:"
     assert example == datum
 
@@ -56,22 +56,25 @@ def test_add_prompt() -> None:
 
     # Too-many-shot
     with pytest.raises(ValueError) as error:
-        qa.add_few_shot_prompt(datum, k=3)
+        qa.add_few_shot_prompt(datum, k=3, prompt_template="\nQ: {question}\nA:")
     assert "k=3" in str(error)
     assert "2 examples" in str(error)
 
 
 def test_evaluate_prediction() -> None:
-    out = "\n\n BICYCLE!"
-    answers1 = ["Bicycle", "car"]
-    answers2 = ["plane", "boat", "\nbicycle"]
-    assert qa.evaluate_prediction(out, answers1)
-    assert not qa.evaluate_prediction(out, answers2)
+    assert qa.evaluate_prediction("bicycle", ["car", "bicycle"])
+    assert qa.evaluate_prediction(" bicycle", ["car", "bicycle"])
+    assert qa.evaluate_prediction(
+        "\n\n 'the BICYCLE is a fine...", ["car", "a Bicycle."]
+    ), "all forms of LHS & RHS normalisation"
+    assert not qa.evaluate_prediction("my bicycle", ["car", "bicycle"])
+    assert not qa.evaluate_prediction("bicycle", ["car", "your bicycle"])
+    assert not qa.evaluate_prediction("bicycle", ["car", "'.'"]), "rhs normalised to ''"
 
 
 def test_evaluate() -> None:
     adapter = Adapter.from_pretrained("EleutherAI/pythia-70m")
-    example_ctxs = ["context "] * 4
+    example_ctxs = ["context"] * 4
     example_prompts = ["plane", "boat", "bicycle", "car"]
     example_answers = [
         ["plane", "jet plane"],
@@ -90,7 +93,7 @@ def test_evaluate() -> None:
         self: Adapter, ctxs_batch: List[str], prompts_batch: List[str], **kwargs: Any
     ) -> List[List[int]]:
         # Just return the prompt
-        assert all(c == "context " for c in ctxs_batch)
+        assert all(c == "context\n" for c in ctxs_batch), str(ctxs_batch)
         return [self.tok_encode(q) for q in prompts_batch]
 
     prefill_lengths = [

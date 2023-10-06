@@ -118,6 +118,7 @@ def test_greedy_sample() -> None:
                 num_generated_tokens,
                 max_prompt_and_generated_tokens=max_prompt_and_generated_tokens,
                 use_cache=use_cache,
+                combine_context_and_prompt=False,
             )
             assert out.shape == (2, 1)
             torch.testing.assert_close(
@@ -156,6 +157,7 @@ def test_greedy_sample_generation_context() -> None:
                         num_generated_tokens=8,
                         generation_context=generation_context,
                         use_cache=use_cache,
+                        combine_context_and_prompt=False,
                     )
                     outputs[name][
                         f"cache_{run}" if use_cache else f"nocache_{run}"

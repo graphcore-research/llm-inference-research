@@ -22,7 +22,7 @@ import rouge_score.rouge_scorer
 from tqdm import tqdm
 
 from . import utility
-from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext, null_model_context
+from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext
 from .utility import AnyDict
 
 
@@ -69,9 +69,10 @@ def evaluate(
     batch_size: int,
     prompt: str = DEFAULT_PROMPT,
     max_generated_tokens: int = 128,
-    generation_context: ModelContext = null_model_context,
-    use_cache: bool = True,
+    generation_context: Optional[ModelContext] = None,
+    use_cache: bool = False,
     cache_dir: str = DEFAULT_CACHE_DIR,
+    combine_context_and_prompt: bool = True,
     desc: Optional[str] = None,
 ) -> Iterable[AnyDict]:
     """Evaluate a generic summarisation task, comparing model output against
@@ -111,6 +112,7 @@ def evaluate(
             generation_context=generation_context,
             use_cache=use_cache,
             cache_dir=cache_dir,
+            combine_context_and_prompt=combine_context_and_prompt,
         )
         for b, reference_length, output_ids in zip(
             batch, reference_lengths, list(outputs)
