@@ -33,7 +33,9 @@ def test_run_one(tmp_path: Path) -> None:
 def test_run_many(tmp_path: Path) -> None:
     with um.patch(
         "llminference.experiments.run_one",
-        lambda xp: dict(**xp.to_dict(), outcome="fake", pid=os.getpid()),
+        lambda xp, progress: dict(
+            **xp.to_dict(), outcome="fake", pid=os.getpid(), progress=progress
+        ),
     ):
         xps = [
             experiments.Experiment(
@@ -54,3 +56,4 @@ def test_run_many(tmp_path: Path) -> None:
     # `out_one` ran in this process, `out_many` ran in a subprocess
     assert out_one.pop("pid") != out_many.pop("pid")
     assert out_one == out_many
+    assert out_one["progress"] is False

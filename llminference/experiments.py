@@ -138,7 +138,7 @@ class SparsityMethods:
 
 
 def _evaluate(
-    task: Task, adapter: eval_adapter.Adapter, batch_size: int
+    task: Task, adapter: eval_adapter.Adapter, batch_size: int, progress: bool
 ) -> Dict[str, Any]:
     if task.name in ["triviaqa", "squad"]:
         data = (
@@ -164,7 +164,12 @@ def _evaluate(
         evaluate_fn = summarisation.evaluate
 
     results = list(
-        evaluate_fn(adapter=adapter, examples=examples, batch_size=batch_size)
+        evaluate_fn(
+            adapter=adapter,
+            examples=examples,
+            batch_size=batch_size,
+            progress=progress,
+        )
     )
     return dict(
         results=results,
@@ -177,7 +182,7 @@ def _evaluate(
     )
 
 
-def run_one(xp: Experiment) -> Outcome:
+def run_one(xp: Experiment, progress: bool = True) -> Outcome:
     """Run a single experiment, optionally logging to wandb."""
     if xp.execution.wandb:
         mode = "offline" if xp.execution.wandb == "offline" else "online"
@@ -203,7 +208,9 @@ def run_one(xp: Experiment) -> Outcome:
     out["model_config"] = adapter.model.config.to_diff_dict()
     t0 = time.time()
     try:
-        out.update(_evaluate(xp.task, adapter, xp.execution.batch_size))
+        out.update(
+            _evaluate(xp.task, adapter, xp.execution.batch_size, progress=progress)
+        )
     except Exception as error:
         out["error"] = repr(error)
         out["backtrace"] = traceback.format_exc()
@@ -224,7 +231,7 @@ def _run_many_task(xp: Experiment) -> Dict[str, Any]:
 
     def _run() -> None:
         torch.set_num_threads(32)
-        queue.put(run_one(xp))
+        queue.put(run_one(xp, progress=False))
 
     p = multiprocessing.Process(target=_run, daemon=False)
     p.start()
@@ -250,4 +257,4 @@ def run_many(
                     writer(result)
         else:
             for xp in tqdm.tqdm(xps, desc="experiments"):
-                writer(run_one(xp))
+                writer(run_one(xp, progress=False))

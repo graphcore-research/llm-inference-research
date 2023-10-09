@@ -15,7 +15,7 @@ For example:
 """
 
 from functools import partial
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import datasets
 import rouge_score.rouge_scorer
@@ -73,7 +73,7 @@ def evaluate(
     use_cache: bool = False,
     cache_dir: str = DEFAULT_CACHE_DIR,
     combine_context_and_prompt: bool = True,
-    desc: Optional[str] = None,
+    progress: Union[bool, str] = True,
 ) -> Iterable[AnyDict]:
     """Evaluate a generic summarisation task, comparing model output against
     a reference using ROUGE score.
@@ -94,7 +94,8 @@ def evaluate(
         use_cache (bool, optional): Use cached context when sampling.
         Defaults to True.
         cache_dir (str, optional): Context cache path. Defaults to "cache".
-        desc (str, optional): tqdm description
+        progress (bool|str, optional): enable tqdm (True) and set description
+        (str), or disable (False).
 
     Yields:
         {id: int, output: str, rougeL: float}: For each input.
@@ -102,7 +103,10 @@ def evaluate(
     scorer = rouge_score.rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
     for batch in tqdm(
         list(utility.batches(examples, batch_size)),
-        desc=desc or f"Evaluating {adapter.model.name_or_path}",
+        desc=progress
+        if isinstance(progress, str)
+        else f"Evaluating {adapter.model.name_or_path}",
+        disable=progress is False,
     ):
         reference_lengths = [len(adapter.tok_encode(b["reference"])) for b in batch]
         outputs = adapter.greedy_sample(

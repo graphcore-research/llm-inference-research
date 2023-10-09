@@ -135,15 +135,24 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
                 key.device,
             )
 
+        modified_attention_mask = attention_mask
         if self.enable_eviction:
             # Apply the mask to remove previously evicted values
             fmin = torch.finfo(attention_mask.dtype).min
-            attention_mask = (
+            modified_attention_mask = (
                 attention_mask
                 + fmin * ~self.eviction.mask[..., None, : attention_mask.shape[-1]]
             )
 
-        output, weights = super()._attn(query, key, value, attention_mask, head_mask)
+        output, weights = super()._attn(
+            query, key, value, modified_attention_mask, head_mask
+        )
+        # Most of the code doesn't care about "junk" queries, but it could confuse
+        # eviction models, so we mask them out here, assuming that the last N values
+        # correspond to the last N queries
+        weights *= sparse_attention.score_to_mask(
+            attention_mask[..., -weights.shape[2] :]
+        ).swapdims(-1, -2)
         self.eviction.update(
             weights, sparse_attention.causal_index(attention_mask.squeeze(2))
         )
