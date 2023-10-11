@@ -206,7 +206,7 @@ def add_few_shot_prompt(
             f"Cannot form a (k={k})-shot prompt for question {datum['id']}"
             f", which only provides {len(examples)} examples"
         )
-    prompt = "".join(
+    prompt = "\n".join(
         [
             prompt_template.format(**eg)
             + answer_template.format(answer=min(eg["answers"], key=len))

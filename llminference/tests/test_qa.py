@@ -40,23 +40,23 @@ def test_add_prompt() -> None:
         ],
     )
     # Zero shot
-    example = qa.add_few_shot_prompt(datum, k=0, prompt_template="\nQ: {question}\nA:")
-    assert example.pop("prompt") == "\nQ: Dummy qu\nA:"
+    example = qa.add_few_shot_prompt(datum, k=0, prompt_template="Q: {question}\nA:")
+    assert example.pop("prompt") == "Q: Dummy qu\nA:"
     assert example == datum
 
     # Two shot
-    example = qa.add_few_shot_prompt(datum, k=2, prompt_template="\nQ: {question}\nA:")
-    assert example["prompt"] == "".join(
+    example = qa.add_few_shot_prompt(datum, k=2, prompt_template="Q: {question}\nA:")
+    assert example["prompt"] == "\n".join(
         [
-            "\nQ: Eg 1\nA: shortans1",
-            "\nQ: Eg 2\nA: shortans2",
-            "\nQ: Dummy qu\nA:",
+            "Q: Eg 1\nA: shortans1",
+            "Q: Eg 2\nA: shortans2",
+            "Q: Dummy qu\nA:",
         ]
     )
 
     # Too-many-shot
     with pytest.raises(ValueError) as error:
-        qa.add_few_shot_prompt(datum, k=3, prompt_template="\nQ: {question}\nA:")
+        qa.add_few_shot_prompt(datum, k=3, prompt_template="Q: {question}\nA:")
     assert "k=3" in str(error)
     assert "2 examples" in str(error)
 
