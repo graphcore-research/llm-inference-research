@@ -18,6 +18,7 @@ from transformers import PreTrainedModel
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
 
 from . import (
+    ann_attention,
     eval_adapter,
     eviction_attention,
     qa,
@@ -132,6 +133,11 @@ class SparsityMethods:
         return eviction_attention.convert_gptneox(
             model, eviction_attention.Settings(**settings)
         )
+
+    @staticmethod
+    def ann(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
+        assert isinstance(model, GPTNeoXForCausalLM)
+        return ann_attention.convert_gptneox(model, ann_attention.Settings(**settings))
 
 
 # Running
