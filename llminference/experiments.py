@@ -227,16 +227,19 @@ def run_one(xp: Experiment, progress: bool = True) -> Outcome:
 
 def _run_many_task(xp: Experiment) -> Dict[str, Any]:
     """Run an experiment in a non-daemonic subprocess (for sake of wandb)."""
-    queue: "multiprocessing.Queue[Dict[str, Any]]" = multiprocessing.Queue(1)
+    queue: "multiprocessing.Queue[Dict[str, Any]]" = multiprocessing.Queue()
+    num_threads = torch.get_num_threads()
 
     def _run() -> None:
-        torch.set_num_threads(32)
+        torch.set_num_threads(num_threads)
         queue.put(run_one(xp, progress=False))
 
-    p = multiprocessing.Process(target=_run, daemon=False)
+    p = multiprocessing.get_context("fork").Process(target=_run, daemon=False)
     p.start()
-    p.join()
-    return queue.get()
+    try:
+        return queue.get()
+    finally:
+        p.join()
 
 
 def run_many(
