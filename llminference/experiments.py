@@ -16,6 +16,7 @@ import tqdm
 import wandb
 from transformers import PreTrainedModel
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
+from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
 from . import (
     ann_attention,
@@ -58,6 +59,9 @@ class Sparsity:
     def __init__(self, name: str, **kwargs: Any):
         self.name = name
         self.__dict__.update(kwargs)
+
+    def __str__(self):
+        return str(self.__dict__)
 
 
 @dataclass
@@ -138,6 +142,11 @@ class SparsityMethods:
     def ann(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
         assert isinstance(model, GPTNeoXForCausalLM)
         return ann_attention.convert_gptneox(model, ann_attention.Settings(**settings))
+
+    @staticmethod
+    def ann_llama(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
+        assert isinstance(model, LlamaForCausalLM)
+        return ann_attention.convert_llama(model, ann_attention.Settings(**settings))
 
 
 # Running
