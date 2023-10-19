@@ -16,7 +16,7 @@ See: H20 (https://arxiv.org/abs/2306.14048)
 import copy
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator, List, Optional, Tuple
+from typing import Any, Iterator, List, Optional, Tuple, Union
 
 import torch
 import transformers
@@ -34,12 +34,42 @@ from . import sparse_attention
 class Settings:
     k: int
     local_k: int
+    strategy: str  # "sum_weight|lru"
 
 
-@dataclass
-class HistoryState:
-    mask: Tensor
-    score: Tensor
+class SumWeight:
+    def __init__(self, shape: Tuple[int, ...], device: torch.device):
+        self.score = torch.zeros(shape, device=device)
+
+    def update(self, weight: Tensor) -> Tensor:
+        # Update the score of each KV (summed over Q)
+        key_length = weight.shape[-1]
+        self.score[..., : weight.shape[-1]] += weight.sum(-2)
+        return self.score[..., :key_length]
+
+
+class LRU:
+    def __init__(self, shape: Tuple[int, ...], device: torch.device):
+        # Store timestamps as float for ease-of-conversion to scores
+        self.last_used = torch.zeros(shape, device=device)
+        # Note: range [1, N], so that 'use' at timestep 0 is better than 'never used'
+        self._t = 1 + torch.arange(shape[-1], device=device, dtype=torch.float32)
+
+    def update(self, weight: Tensor) -> Tensor:
+        _, _, query_length, key_length = weight.shape
+
+        # Compute a mask of 'use' for each key (weight >= 1/sequence_length)
+        average_weight = (
+            (weight > 1e-9).sum(-1, keepdim=True, dtype=weight.dtype).reciprocal_()
+        )
+        used = (weight >= average_weight).float()
+
+        # Update the timestamp for the most recent 'use' of each key
+        used.mul_(self._t[key_length - query_length : key_length, None])
+        self.last_used[..., :key_length] = torch.maximum(
+            self.last_used[..., :key_length], used.max(dim=-2).values
+        )
+        return self.last_used[..., :key_length]
 
 
 class Eviction:
@@ -58,23 +88,23 @@ class Eviction:
         device: torch.device,
     ):
         self.settings = settings
-        self.score = torch.zeros(shape, device=device)
+        self.strategy: Union[SumWeight, LRU]
+        if settings.strategy == "sum_weight":
+            self.strategy = SumWeight(shape, device)
+        elif settings.strategy == "lru":
+            self.strategy = LRU(shape, device)
+        else:
+            raise ValueError(f"Unexpected eviction strategy {settings.strategy}")
         self.mask = torch.ones(shape, dtype=torch.bool, device=device)
         self._last_length = 0
-
-    @property
-    def history_state(self) -> HistoryState:
-        return HistoryState(
-            mask=self.mask[..., : self._last_length],
-            score=self.score[..., : self._last_length],
-        )
+        self._timestamp = 1 + torch.arange(shape[-1])
 
     def update(self, attention_weight: Tensor, causal_index: Tensor) -> None:
         """Update the eviction mask, from a step's attention weight matrix.
 
         attention_weight: shape (batch, head, query, key)
 
-        causal_index: shape (batch, query, key), -1 for masked-out tokens
+        causal_index: shape (batch, head, key), -1 for masked-out tokens
         """
 
         if self._last_length > attention_weight.shape[-1]:
@@ -84,21 +114,20 @@ class Eviction:
                 " generation to ensure the eviction mask is reset."
             )
         self._last_length = attention_weight.shape[-1]
-        context_len = attention_weight.shape[-1]
-        finfo = torch.finfo(self.score.dtype)
+        key_length = attention_weight.shape[-1]
+        finfo = torch.finfo(torch.float32)
 
         # Update the score of each KV (summed over Q)
-        self.score[..., :context_len] += attention_weight.float().sum(-2)
+        score = self.strategy.update(attention_weight).clone()
 
-        # Combine score, locality and permadeath into 'total_score'
-        total_score = self.score[..., :context_len].clone()  # popular KVs
+        # Combine locality and permadeath into score
         is_local = (0 <= causal_index) & (causal_index < self.settings.local_k)
-        total_score += finfo.max * is_local  # local KVs
-        total_score += finfo.min * ~self.mask[..., :context_len]  # dead KVs
+        score.masked_fill_(is_local, finfo.max)  # local KVs
+        score.masked_fill_(~self.mask[..., :key_length], finfo.min)  # dead KVs
 
         # Update the mask
-        self.mask[..., :context_len] &= sparse_attention.topk_mask(
-            total_score, min(context_len, self.settings.k)
+        self.mask[..., :key_length] &= sparse_attention.topk_mask(
+            score, min(key_length, self.settings.k)
         )
 
 
@@ -115,7 +144,8 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
         self.eviction_settings = settings
         self.enable_eviction = False
         self.eviction: Optional[Eviction] = None
-        self.history: List[HistoryState] = []
+        # Set to an empty list to turn on eviction mask logging
+        self.eviction_masks: Optional[List[Tensor]] = None
 
     def _attn(
         self,
@@ -137,11 +167,12 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
 
         modified_attention_mask = attention_mask
         if self.enable_eviction:
+            eviction_mask = self.eviction.mask[..., None, : attention_mask.shape[-1]]
+            if self.eviction_masks is not None:
+                self.eviction_masks.append(eviction_mask.clone())
             # Apply the mask to remove previously evicted values
-            fmin = torch.finfo(attention_mask.dtype).min
             modified_attention_mask = (
-                attention_mask
-                + fmin * ~self.eviction.mask[..., None, : attention_mask.shape[-1]]
+                attention_mask + torch.finfo(attention_mask.dtype).min * ~eviction_mask
             )
 
         output, weights = super()._attn(
@@ -160,9 +191,7 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
 
 
 @contextmanager
-def generation_context(
-    model: GPTNeoXForCausalLM, keep_history: bool = False
-) -> Iterator[GPTNeoXForCausalLM]:
+def generation_context(model: GPTNeoXForCausalLM) -> Iterator[GPTNeoXForCausalLM]:
     """(Context manager) enable KV eviction during this scope."""
     attns = [m for m in model.modules() if isinstance(m, GPTNeoXAttentionWithEviction)]
     for m in attns:
@@ -171,9 +200,6 @@ def generation_context(
     yield model
     for m in attns:
         m.enable_eviction = False
-        if keep_history:
-            assert m.eviction
-            m.history.append(m.eviction.history_state)
         m.eviction = None
 
 
