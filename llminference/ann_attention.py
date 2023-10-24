@@ -88,6 +88,23 @@ class Settings:
     add_remainder: bool
     score: ScoreSettings
 
+    def __init__(
+        self, k: int, local_k: int, score: Union[ScoreSettings, str], **args: Any
+    ):
+        if isinstance(score, str):
+            ctor: Any = dict(low_rank=LowRank.Settings, sparse_q=SparseQ.Settings)[
+                score
+            ]
+            score_settings: ScoreSettings = ctor(**args)
+        else:
+            assert (
+                not args
+            ), "ann_attention.Setting only accepts **args when `score` is a string"
+            score_settings = score
+        self.k = k
+        self.local_k = local_k
+        self.score = score_settings
+
 
 def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
     """A broadcasting version of torch.gather."""

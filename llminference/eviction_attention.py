@@ -45,32 +45,31 @@ class SumWeight:
         # Update the score of each KV (summed over Q)
         key_length = weight.shape[-1]
         self.score[..., : weight.shape[-1]] += weight.sum(-2)
-        return self.score[..., :key_length].clone()
+        return self.score[..., :key_length]
 
 
 class LRU:
     def __init__(self, shape: Tuple[int, ...], device: torch.device):
-        self.last_used = torch.zeros(shape, device=device, dtype=torch.long)
-        # Note: 1-N, so that 'use' at timestep 0 is better than 'never used'
-        self._t = 1 + torch.arange(shape[-1], device=device)
+        # Store timestamps as float for ease-of-conversion to scores
+        self.last_used = torch.zeros(shape, device=device)
+        # Note: range [1, N], so that 'use' at timestep 0 is better than 'never used'
+        self._t = 1 + torch.arange(shape[-1], device=device, dtype=torch.float32)
 
     def update(self, weight: Tensor) -> Tensor:
         _, _, query_length, key_length = weight.shape
 
         # Compute a mask of 'use' for each key (weight >= 1/sequence_length)
-        sequence_length = (weight > 1e-9).sum(-1, keepdim=True)
-        used = (weight * sequence_length) >= 1
+        average_weight = (
+            (weight > 1e-9).sum(-1, keepdim=True, dtype=weight.dtype).reciprocal_()
+        )
+        used = (weight >= average_weight).float()
 
         # Update the timestamp for the most recent 'use' of each key
-        last_used = (
-            (used * self._t[key_length - query_length : key_length, None])
-            .max(dim=-2)
-            .values
-        )
+        used.mul_(self._t[key_length - query_length : key_length, None])
         self.last_used[..., :key_length] = torch.maximum(
-            self.last_used[..., :key_length], last_used
+            self.last_used[..., :key_length], used.max(dim=-2).values
         )
-        return self.last_used[..., :key_length].float()
+        return self.last_used[..., :key_length]
 
 
 class Eviction:
@@ -119,7 +118,7 @@ class Eviction:
         finfo = torch.finfo(torch.float32)
 
         # Update the score of each KV (summed over Q)
-        score = self.strategy.update(attention_weight)
+        score = self.strategy.update(attention_weight).clone()
 
         # Combine locality and permadeath into score
         is_local = (0 <= causal_index) & (causal_index < self.settings.local_k)

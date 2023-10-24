@@ -79,7 +79,9 @@ def torch_load_save_to_memory(
 
     with um.patch("torch.save", save_to_dict), um.patch(
         "torch.load", load_from_dict
-    ), um.patch("pathlib.Path.exists", exists_in_dict):
+    ), um.patch("pathlib.Path.exists", exists_in_dict), um.patch(
+        "pathlib.Path.mkdir", lambda *_, **__: None
+    ):
         yield
 
 
