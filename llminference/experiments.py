@@ -60,7 +60,7 @@ class Sparsity:
         self.name = name
         self.__dict__.update(kwargs)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return str(self.__dict__)
 
 
@@ -140,13 +140,8 @@ class SparsityMethods:
 
     @staticmethod
     def ann(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, GPTNeoXForCausalLM)
-        return ann_attention.convert_gptneox(model, ann_attention.Settings(**settings))
-
-    @staticmethod
-    def ann_llama(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, LlamaForCausalLM)
-        return ann_attention.convert_llama(model, ann_attention.Settings(**settings))
+        assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
+        return ann_attention.convert(model, ann_attention.Settings(**settings))
 
 
 # Running

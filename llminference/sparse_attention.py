@@ -66,6 +66,7 @@ def causal_index(score: Tensor) -> Tensor:
 def sparse_softmax_fixed_k(
     x: Tensor,
     k: int,
+    dtype: Optional[torch.dtype] = None,
     dim: int = -1,
     add_avg: bool = False,
     apply_after_softmax: bool = True,
@@ -95,6 +96,8 @@ def sparse_softmax_fixed_k(
     assert not (
         add_avg and not apply_after_softmax
     ), "add_avg requires apply_after_softmax"
+    if dtype is not None:
+        x = x.to(dtype)
     if out_weights is None:
         out_weights = torch.tensor(1.0, dtype=x.dtype, device=x.device)
 
