@@ -2,7 +2,7 @@
 
 import copy
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple, Union, cast
+from typing import Any, Callable, List, Optional, Tuple, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -89,7 +89,12 @@ class Settings:
     score: ScoreSettings
 
     def __init__(
-        self, k: int, local_k: int, score: Union[ScoreSettings, str], **args: Any
+        self,
+        k: int,
+        local_k: int,
+        add_remainder: bool,
+        score: Union[ScoreSettings, str],
+        **args: Any,
     ):
         if isinstance(score, str):
             ctor: Any = dict(low_rank=LowRank.Settings, sparse_q=SparseQ.Settings)[
@@ -103,6 +108,7 @@ class Settings:
             score_settings = score
         self.k = k
         self.local_k = local_k
+        self.add_remainder = add_remainder
         self.score = score_settings
 
 
