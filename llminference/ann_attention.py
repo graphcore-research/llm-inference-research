@@ -155,7 +155,7 @@ class ANN(nn.Module):
         assert logmask.shape == (batch, n_heads, 1, seq)
 
         # Calculate an approximate score for each (query, key) pair
-        score = self.score(query, key) + logmask
+        score = (self.score(query, key) + logmask).float()
 
         # Set the score of local keys to max
         causal_index = sparse_attention.causal_index(logmask[:, :, -1, :])
@@ -183,7 +183,7 @@ class ANN(nn.Module):
             remainder = (
                 1 - gather((score - norm).exp(), -1, indices).sum(-1, keepdim=True)
             ).log() + norm
-            logmask = torch.cat([remainder, logmask], -1)
+            logmask = torch.cat([remainder.to(logmask.dtype), logmask], -1)
 
         return query, key, value, logmask
 
