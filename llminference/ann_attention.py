@@ -85,14 +85,14 @@ ScoreSettings = Union[LowRank.Settings, SparseQ.Settings]
 class Settings:
     k: int
     local_k: int
-    add_remainder: bool
+    add_remainder: Union[bool, str]  # False | "v2"
     score: ScoreSettings
 
     def __init__(
         self,
         k: int,
         local_k: int,
-        add_remainder: bool,
+        add_remainder: Union[bool, str],
         score: Union[ScoreSettings, str],
         **args: Any,
     ):
@@ -136,7 +136,7 @@ class ANN(nn.Module):
 
     def forward(
         self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor]:
         """Preprocess (key, value, mask) for ANN attention.
 
         query -- (batch, n_heads, 1, head_size)
@@ -147,7 +147,9 @@ class ANN(nn.Module):
 
         logmask -- (batch, n_heads, 1, seq)
 
-        returns -- (query, key, value, logmask)
+        returns -- (output, weights)
+                   output -- (batch, n_heads, 1, head_size)
+                   weights -- (batch, n_heads, 1, seq)
         """
         batch, n_heads, seq, head_size = key.shape
         assert query.shape == (batch, n_heads, 1, head_size)
@@ -175,17 +177,24 @@ class ANN(nn.Module):
         value = gather(value, -2, kv_indices)
         logmask = gather(logmask, -1, indices)
 
-        # Optional "remainder" kv
+        # Optional "mean_value" kv
+        mean_value_weight = 0.0
         if self.settings.add_remainder:
-            key = torch.cat([torch.zeros_like(mean_value), key], -2)
-            value = torch.cat([mean_value, value], -2)
-            norm = torch.logsumexp(score, -1, keepdim=True)
-            remainder = (
-                1 - gather((score - norm).exp(), -1, indices).sum(-1, keepdim=True)
-            ).log() + norm
-            logmask = torch.cat([remainder.to(logmask.dtype), logmask], -1)
+            assert self.settings.add_remainder == "v2"
+            mean_value_weight = 1 - gather(torch.softmax(score, -1), -1, indices).sum(
+                -1, keepdim=True
+            )
 
-        return query, key, value, logmask
+        # Attention, with left-over weight reallocation
+        weights = torch.softmax(
+            (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask),
+            -1,
+        )
+        output = (1 - mean_value_weight) * (
+            weights @ value
+        ) + mean_value_weight * mean_value
+
+        return output, weights
 
 
 class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
@@ -205,6 +214,7 @@ class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
 
         # Only enable ANN during autoregressive generation
         if query.shape[-2] == 1:
+            assert False, "TODO, I've broken this"
             query, key, value, attention_mask = self.ann(
                 query,
                 key,
@@ -223,14 +233,14 @@ class LlamaAttentionWithANN(llama_attention.LlamaAttention):
         self.settings = settings
         self.ann = ANN(settings, self.num_heads, self.head_dim)
 
-    def _process_qkv(
+    def _attn(
         self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+    ) -> Tuple[Tensor, Tensor]:
         if query.shape[-2] == 1:
-            return self.ann(  # type:ignore[no-any-return]
+            return self.ann(
                 query, key, value, logmask.broadcast_to(key.unsqueeze(-3).shape[:-1])
             )
-        return query, key, value, logmask
+        return super()._attn(query, key, value, logmask)
 
 
 def convert_module(

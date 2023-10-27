@@ -21,16 +21,42 @@ from transformers.models.llama.modeling_llama import apply_rotary_pos_emb, repea
 
 class LlamaAttention(modeling_llama.LlamaAttention):
     # MODIFIED (added)
-    def _process_qkv(
-        self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        return query, key, value, logmask
+    def _attn(
+        self,
+        query_states: Tensor,
+        key_states: Tensor,
+        value_states: Tensor,
+        attention_mask: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        # MODIFIED (added)
+        bsz, _, q_len, _ = query_states.shape
+        _, _, kv_seq_len, _ = key_states.shape
 
-    # MODIFIED (added)
-    def _process_logits(
-        self, logits: Tensor, logmask: Tensor, query: Tensor, key: Tensor, value: Tensor
-    ) -> Tensor:
-        return logits
+        # MODIFIED (moved)
+        attn_weights = torch.matmul(
+            query_states, key_states.transpose(2, 3)
+        ) / math.sqrt(self.head_dim)
+
+        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
+            raise ValueError(
+                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
+                f" {attn_weights.size()}"
+            )
+
+        if attention_mask is not None:
+            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+                raise ValueError(
+                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+                )
+            attn_weights = attn_weights + attention_mask
+
+        # upcast attention to fp32
+        attn_weights = nn.functional.softmax(
+            attn_weights, dim=-1, dtype=torch.float32
+        ).to(query_states.dtype)
+        attn_output = torch.matmul(attn_weights, value_states)
+
+        return attn_output, attn_weights
 
     def forward(
         self,
@@ -105,40 +131,10 @@ class LlamaAttention(modeling_llama.LlamaAttention):
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
-        # MODIFIED (added)
-        query_states, key_states, value_states, attention_mask = self._process_qkv(
+        # MODIFIED (call)
+        attn_output, attn_weights = self._attn(
             query_states, key_states, value_states, attention_mask
         )
-        kv_seq_len = key_states.shape[-2]
-
-        attn_weights = torch.matmul(
-            query_states, key_states.transpose(2, 3)
-        ) / math.sqrt(self.head_dim)
-
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                f"Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
-        if attention_mask is not None:
-            # MODIFIED (commented)
-            # if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-            #     raise ValueError(
-            #         f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-            #     )
-            attn_weights = attn_weights + attention_mask
-
-        # MODIFIED (added)
-        attn_weights = self._process_logits(
-            attn_weights, attention_mask, query_states, key_states, value_states
-        )
-
-        # upcast attention to fp32
-        attn_weights = nn.functional.softmax(
-            attn_weights, dim=-1, dtype=torch.float32
-        ).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
             raise ValueError(
