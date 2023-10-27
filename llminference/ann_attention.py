@@ -181,15 +181,16 @@ class ANN(nn.Module):
         mean_value_weight = 0.0
         if self.settings.add_remainder:
             assert self.settings.add_remainder == "v2"
-            mean_value_weight = 1 - gather(torch.softmax(score, -1), -1, indices).sum(
-                -1, keepdim=True
-            )
+            mean_value_weight = (
+                1 - gather(torch.softmax(score, -1), -1, indices).sum(-1, keepdim=True)
+            ).to(value.dtype)
 
         # Attention, with left-over weight reallocation
         weights = torch.softmax(
             (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask),
             -1,
-        )
+            dtype=torch.float32,
+        ).to(value.dtype)
         output = (1 - mean_value_weight) * (
             weights @ value
         ) + mean_value_weight * mean_value
