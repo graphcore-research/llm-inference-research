@@ -98,7 +98,13 @@ def evaluate(
         (str), or disable (False).
 
     Yields:
-        {id: int, output: str, rougeL: float}: For each input.
+        {
+            id: int,
+            output: str,
+            rougeL: float,
+            prefill_length: int,
+            reference_length:int,
+        }: For each input.
     """
     scorer = rouge_score.rouge_scorer.RougeScorer(["rougeL"], use_stemmer=True)
     for batch in tqdm(

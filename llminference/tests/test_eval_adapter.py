@@ -180,6 +180,137 @@ def test_greedy_sample_generation_context() -> None:
         assert torch.equal(caches["default"][k], caches["pruned"][k])
 
 
+def test_forced_sample() -> None:
+    _examples_a = [
+        (
+            "The markup language called wikitext, also known as wiki markup or"
+            " wikicode, consists of the syntax and keywords used by the MediaWiki"
+            " software to format a page."
+        ),
+        (
+            "Compared to the preprocessed version of Penn Treebank (PTB),"
+            " WikiText-2 is over 2 times larger and WikiText-103 is over 110 times"
+            " larger. The WikiText dataset also features a far larger vocabulary"
+            " and retains the original case, punctuation and numbers - all of which"
+            " are removed in PTB."
+        ),
+    ]
+    _examples_b = [
+        _examples_a[0],
+        "Compared to the preprocessed version of Penn Treebank (PTB)...",
+    ]
+    examples_a = {
+        warmup: {
+            "prefill": [t[:warmup] for t in _examples_a],
+            "reference": [t[warmup:] for t in _examples_a],
+        }
+        for warmup in [8, 15]
+    }
+    examples_b = {
+        warmup: {
+            "prefill": [t[:warmup] for t in _examples_b],
+            "reference": [t[warmup:] for t in _examples_b],
+        }
+        for warmup in [8, 15]
+    }
+
+    adapter = eval_adapter.Adapter.from_pretrained("EleutherAI/pythia-70m")
+    adapter.model.double()
+
+    logits_a_8 = adapter.forced_sample(**examples_a[8])  # type: ignore[arg-type]
+    logits_b_8 = adapter.forced_sample(**examples_b[8])  # type: ignore[arg-type]
+    logits_a_15 = adapter.forced_sample(**examples_a[15])  # type: ignore[arg-type]
+    logits_b_15 = adapter.forced_sample(**examples_b[15])  # type: ignore[arg-type]
+
+    len_a_8 = len(adapter.tok_encode(examples_a[8]["reference"][1]))
+    len_b_8 = len(adapter.tok_encode(examples_b[8]["reference"][0]))
+    len_a_15 = len(adapter.tok_encode(examples_a[15]["reference"][1]))
+    len_b_15 = len(adapter.tok_encode(examples_b[15]["reference"][0]))
+
+    # Check correct shapes
+    assert logits_a_8.shape == (2, len_a_8)
+    assert logits_b_8.shape == (2, len_b_8)
+    assert logits_a_15.shape == (2, len_a_15)
+    assert logits_b_15.shape == (2, len_b_15)
+
+    # Should be no nan or inf logits
+    assert not torch.isnan(logits_a_8).any()
+    assert not torch.isnan(logits_b_8).any()
+    assert not torch.isnan(logits_a_15).any()
+    assert not torch.isnan(logits_b_15).any()
+    assert not torch.isinf(logits_a_8).any()
+    assert not torch.isinf(logits_b_8).any()
+    assert not torch.isinf(logits_a_15).any()
+    assert not torch.isinf(logits_b_15).any()
+
+    # Padding should align with length of sequence
+    expected_padding_len = len_a_15 - len_b_15
+    no_padding_logits = logits_a_15[0, :-expected_padding_len]
+    all_padding_logits = logits_a_15[0, -expected_padding_len:]
+    assert (all_padding_logits == 0).all()
+    assert (no_padding_logits != 0).all()
+
+    # Check same inputs have same logits, regardless of padding
+    assert (no_padding_logits == logits_b_15[0]).all()
+
+    # Check logits are the same post-warmup for different warmup lengths
+    # (note: this only works because 8 & 15 align with token boundaries, but it's
+    # a useful sanity check in the case where the warmup-break doesn't affect
+    # tokenization)
+    a_8_ctx_ids = adapter.tok_encode(examples_a[8]["prefill"][1])
+    a_8_gen_ids = adapter.tok_encode(examples_a[8]["reference"][1])
+    a_15_ctx_ids = adapter.tok_encode(examples_a[15]["prefill"][1])
+    a_15_gen_ids = adapter.tok_encode(examples_a[15]["reference"][1])
+    warmup_diff_len = len(a_15_ctx_ids) - len(a_8_ctx_ids)
+
+    # Check tokenization is the same, despite splitting text at different points
+    assert a_8_ctx_ids + a_8_gen_ids == a_15_ctx_ids + a_15_gen_ids
+    # Given tokenization is the same, check post-warmup logits come out the same
+    torch.testing.assert_close(logits_a_8[1, warmup_diff_len:], logits_a_15[1, :])
+
+
+def test_forced_sample_generation_context() -> None:
+    _text = [
+        (
+            "The markup language called wikitext, also known as wiki markup or"
+            " wikicode, consists of the syntax and keywords used by the MediaWiki"
+            " software to format a page. (Note the lowercase spelling of these"
+            " terms.)"
+        ),
+        (
+            "Compared to the preprocessed version of Penn Treebank (PTB),"
+            " WikiText-2 is over 2 times larger and WikiText-103 is over 110 times"
+            " larger. The WikiText dataset also features a far larger vocabulary"
+            " and retains the original case, punctuation and numbers - all of which"
+            " are removed in PTB."
+        ),
+    ]
+    text = {
+        "prefill": [t[:10] for t in _text],
+        "reference": [t[10:] for t in _text],
+    }
+
+    @contextmanager
+    def prune_model_context(model: eval_adapter.Model) -> eval_adapter.Model:
+        original_params = {k: v.clone() for k, v in model.state_dict().items()}
+        for p in model.parameters():
+            p.data *= (p.abs().max() / 10) < p.abs()
+        yield model
+        model.load_state_dict(original_params)
+
+    adapter = eval_adapter.Adapter.from_pretrained("EleutherAI/pythia-70m")
+    adapter.model.double()
+
+    no_context = adapter.forced_sample(**text)  # type: ignore[arg-type]
+    pruning_context = adapter.forced_sample(
+        **text, generation_context=prune_model_context
+    )
+
+    ratio = no_context / pruning_context
+    close = (0.99 < ratio) * (ratio < 1.01)
+    assert not close.any()
+
+
 def dummy_fn() -> int:
     return 100
 

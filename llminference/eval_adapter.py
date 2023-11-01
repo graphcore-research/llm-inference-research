@@ -436,3 +436,95 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                     position_ids = position_ids[:, -1:] + 1
 
         return torch.cat(generated_tokens, dim=1)
+
+    def forced_sample(
+        self,
+        prefill: List[str],
+        reference: List[str],
+        generation_context: Optional[ModelContext] = None,
+    ) -> Tensor:
+        """
+        Sample from the model using teacher-forcing.
+
+        Prefills are provided, which are initially fed to the model to generate the
+        first batch of normalised output logits. Rather than feeding these back
+        into the model, the reference texts are instead tokenized and fed in
+        for the next iteration.
+
+        For each batch of normalised output logits (i.e. log-probabilities), the values
+        corresponding to the next reference tokens are saved. This function returns
+        the concatenation of those normalised 'target' logits.
+
+        Args:
+            prefill (List[str]): List of prefill strings processed before generation
+            reference (List[str]): List of reference strings for teacher-forcing
+            generation_context (ModelContext, optional): A contextmanager function
+            that accepts and yields a PreTrainedModel, used during generation only,
+            for each batch being processed (for example to enable certain behaviours
+            or reset state between batches). If not specified, looks for a generation
+            context in self.model.generation_context.
+
+        Returns:
+            Tensor: Normlised target logits. Shape - (batch_size, num_generated_logits)
+        """
+        with self.tokenizer_override(padding="left", truncation="left"):
+            prefill_enc = self.tokenizer(
+                prefill,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.max_length - 10,  # Generate at least 10 tokens
+            )
+            warmup_ids = prefill_enc["input_ids"]
+            attention_mask = prefill_enc["attention_mask"]
+        with self.tokenizer_override(padding="right", truncation="right"):
+            reference_enc = self.tokenizer(
+                reference,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.max_length - warmup_ids.shape[-1],
+            )
+            all_target_ids = reference_enc["input_ids"]
+
+        past_key_values = None
+        position_ids = None
+
+        # Generate tokens one by one
+        out_logits = []
+        context = (
+            generation_context
+            or getattr(self.model, "generation_context", None)
+            or null_model_context
+        )
+
+        def get_input_ids() -> Iterator[Tensor]:
+            yield warmup_ids
+            yield from all_target_ids[:, :-1].split(1, dim=1)
+
+        def get_target_ids() -> Iterator[Tensor]:
+            yield from all_target_ids.split(1, dim=1)
+
+        with torch.no_grad(), context(self.model) as model:
+            for input_ids, target_ids in zip(get_input_ids(), get_target_ids()):
+                out = model(
+                    input_ids=input_ids.to(model.device),
+                    attention_mask=attention_mask.to(model.device),
+                    past_key_values=past_key_values,
+                    position_ids=position_ids,
+                )
+
+                # Prepare inputs for next iteration
+                attention_mask = torch.cat([attention_mask, target_ids != 0], dim=1)
+                past_key_values = out.past_key_values
+                if position_ids is not None:
+                    position_ids = position_ids[:, -1:] + 1
+
+                logits = out.logits[:, -1, :]
+                target_logits = logits.gather(-1, target_ids)
+                normaliser = torch.logsumexp(logits, -1, keepdim=True)
+                normalised_target_logits = target_logits - normaliser
+                normalised_target_logits *= attention_mask[:, -1, None]
+                out_logits.append(normalised_target_logits)
+
+        return torch.cat(out_logits, dim=1)
