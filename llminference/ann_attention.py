@@ -134,6 +134,41 @@ class ANN(nn.Module):
         # Set to an empty list to turn on ANN index logging
         self.log_indices: Optional[List[Tensor]] = None
 
+    def _attention(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        logmask: Tensor,
+        kv_weight: Tensor,
+        mean_value: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        """Dense attention, with left-over weight reallocation.
+
+        query -- (batch, n_heads, n_query, head_size)
+
+        key -- (batch, n_heads, n_kv, head_size)
+
+        value -- (batch, n_heads, n_kv, head_size)
+
+        logmask -- (batch, n_heads, n_query, n_kv)
+
+        kv_weight -- (batch, n_heads, n_query) | ()
+                  -- 1.0 for regular attention (no reallocation)
+
+        mean_value -- (batch, n_heads, n_query, head_size)
+        """
+        weights = torch.softmax(
+            (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask),
+            -1,
+            dtype=torch.float32,
+        ).to(value.dtype)
+        # Value-mixing with reallocation
+        weights *= kv_weight[..., None]
+        output = weights @ value
+        output += (1 - kv_weight[..., None]) * mean_value
+        return output, weights
+
     def forward(
         self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
     ) -> Tuple[Tensor, Tensor]:
@@ -170,32 +205,27 @@ class ANN(nn.Module):
         if self.log_indices is not None:
             self.log_indices.append(indices)
 
-        # Slice key, value, logmask
-        kv_indices = indices.squeeze(-2).unsqueeze(-1)
-        key = gather(key, -2, kv_indices)
-        mean_value = value.mean(-2, keepdim=True)  # before gather
-        value = gather(value, -2, kv_indices)
-        logmask = gather(logmask, -1, indices)
-
         # Optional "mean_value" kv
-        mean_value_weight = 0.0
+        value_mask = logmask.squeeze(-2).unsqueeze(-1).exp()
+        mean_value = ((value * value_mask).sum(-2) / value_mask.sum(-2)).unsqueeze(-2)
+        kv_weight = torch.tensor(1.0)
         if self.settings.add_remainder:
             assert self.settings.add_remainder == "v2"
-            mean_value_weight = (
-                1 - gather(torch.softmax(score, -1), -1, indices).sum(-1, keepdim=True)
-            ).to(value.dtype)
+            kv_weight = (gather(torch.softmax(score, -1), -1, indices).sum(-1)).to(
+                value.dtype
+            )
 
-        # Attention, with left-over weight reallocation
-        weights = torch.softmax(
-            (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask),
-            -1,
-            dtype=torch.float32,
-        ).to(value.dtype)
-        output = (1 - mean_value_weight) * (
-            weights @ value
-        ) + mean_value_weight * mean_value
-
-        return output, weights
+        # Slice key, value, logmask for attention
+        kv_indices = indices.squeeze(-2).unsqueeze(-1)
+        output, weights = self._attention(
+            query,
+            gather(key, -2, kv_indices),
+            gather(value, -2, kv_indices),
+            gather(logmask, -1, indices),
+            kv_weight=kv_weight,
+            mean_value=mean_value,
+        )
+        return output, torch.zeros_like(logmask).scatter(-1, indices, weights)
 
 
 class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
@@ -212,11 +242,11 @@ class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
         head_mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         assert attention_mask is not None
+        assert head_mask is None
 
         # Only enable ANN during autoregressive generation
         if query.shape[-2] == 1:
-            assert False, "TODO, I've broken this"
-            query, key, value, attention_mask = self.ann(
+            return self.ann(  # type:ignore[no-any-return]
                 query,
                 key,
                 value,
@@ -238,7 +268,7 @@ class LlamaAttentionWithANN(llama_attention.LlamaAttention):
         self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
     ) -> Tuple[Tensor, Tensor]:
         if query.shape[-2] == 1:
-            return self.ann(
+            return self.ann(  # type:ignore[no-any-return]
                 query, key, value, logmask.broadcast_to(key.unsqueeze(-3).shape[:-1])
             )
         return super()._attn(query, key, value, logmask)

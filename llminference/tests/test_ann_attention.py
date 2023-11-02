@@ -1,6 +1,8 @@
 from typing import cast
 
 import torch
+from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
+from transformers.models.llama.configuration_llama import LlamaConfig
 
 from .. import ann_attention as ann
 from .. import eval_adapter
@@ -11,31 +13,73 @@ def test_ann_module() -> None:
     query = torch.randn((batch, n_heads, 1, head_size))
     key = torch.randn((batch, n_heads, n_key, head_size))
     value = torch.randn((batch, n_heads, n_key, head_size))
-    # Mask contains leading `fmin`, different across the batch
-    logmask = torch.finfo(torch.float32).min * (
-        torch.arange(n_key)[None, None, None, :]
-        < torch.tensor([2, 0, 5])[:, None, None, None]
-    ).broadcast_to(batch, n_heads, 1, n_key)
+
+    # Mask out some leading token positions (different across the batch)
+    mask = (torch.tensor([2, 0, 5])[:, None] <= torch.arange(n_key))[
+        :, None, None, :
+    ].broadcast_to(batch, n_heads, 1, n_key)
+    key.masked_fill_(~mask[:, :, 0, :, None], 1e9)
+    value.masked_fill_(~mask[:, :, 0, :, None], float("inf"))
+
     for score, add_remainder in [
         (ann.LowRank.Settings(8), False),
-        (ann.SparseQ.Settings(6), True),
+        (ann.SparseQ.Settings(6), "v2"),
     ]:
         module = ann.ANN(
             ann.Settings(
                 k=4,
                 local_k=1,
-                add_remainder=add_remainder,
+                add_remainder=cast(bool, add_remainder),
                 score=cast(ann.ScoreSettings, score),
             ),
             n_heads,
             head_size,
         )
-        q, k, v, m = module(query, key, value, logmask)
-        assert torch.equal(q, query)
-        assert k.shape == (batch, n_heads, 4 + add_remainder, head_size)
-        assert v.shape == (batch, n_heads, 4 + add_remainder, head_size)
-        assert m.shape == (batch, n_heads, 1, 4 + add_remainder)
-        assert torch.isin(key[:, :, -1, :].flatten(), k.flatten()).all(), "local_k"
+        output, weights = module(query, key, value, mask.float().log())
+        assert not torch.isinf(output).any()
+        assert output.shape == (batch, n_heads, 1, head_size)
+        assert weights.shape == (batch, n_heads, 1, n_key)
+        # At most 4 nonzeros per (batch, head), but may be fewer (due to the mask)
+        assert ((weights != 0).sum(-1) == mask.sum(-1).minimum(torch.tensor(4))).all()
+        assert (weights[..., -1] != 0).all(), "local_k"
+        if add_remainder:
+            assert (weights.sum(-1) <= 1.00001).all()
+        else:
+            torch.testing.assert_close(weights.sum(-1), torch.ones((batch, n_heads, 1)))
+
+
+def test_gptneox_ann() -> None:
+    module = ann.GPTNeoXAttentionWithANN(
+        GPTNeoXConfig(hidden_size=128, num_attention_heads=4),
+        ann.Settings(k=8, local_k=2, add_remainder="v2", score="sparse_q", rank=12),
+    )
+    output, _, weights = module(
+        torch.randn(13, 1, 128),
+        attention_mask=torch.zeros(13, 1, 1, 20),
+        position_ids=torch.tensor([19])[None],
+        layer_past=(torch.randn(13, 4, 19, 32), torch.randn(13, 4, 19, 32)),
+        output_attentions=True,
+    )
+    assert output.shape == (13, 1, 128)
+    assert ((-1e3 <= output) & (output <= 1e3)).all()  # "reasonable" outputs
+    assert ((weights != 0).sum(-1) == 8).all()
+
+
+def test_llama_ann() -> None:
+    module = ann.LlamaAttentionWithANN(
+        LlamaConfig(hidden_size=128, num_attention_heads=4, num_key_value_heads=4),
+        ann.Settings(k=8, local_k=2, add_remainder="v2", score="sparse_q", rank=12),
+    )
+    output, weights, _ = module(
+        torch.randn(13, 1, 128),
+        attention_mask=torch.zeros(13, 1, 1, 20),
+        position_ids=torch.tensor([19])[None],
+        past_key_value=(torch.randn(13, 4, 19, 32), torch.randn(13, 4, 19, 32)),
+        output_attentions=True,
+    )
+    assert output.shape == (13, 1, 128)
+    assert ((-1e3 <= output) & (output <= 1e3)).all()  # "reasonable" outputs
+    assert ((weights != 0).sum(-1) == 8).all()
 
 
 def test_convert_gptneox() -> None:
