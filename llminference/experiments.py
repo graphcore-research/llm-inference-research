@@ -9,7 +9,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast, Tuple
 
 import torch
 import tqdm
@@ -22,6 +22,7 @@ from . import (
     ann_attention,
     eval_adapter,
     eviction_attention,
+    pipelined_models,
     qa,
     sparse_attention,
     summarisation,
@@ -108,8 +109,6 @@ class Experiment:
 Outcome = Dict[str, Any]
 
 # Method
-
-
 class SparsityMethods:
     @classmethod
     def apply(cls, sparsity: Sparsity, model: PreTrainedModel) -> PreTrainedModel:
@@ -157,8 +156,6 @@ class SparsityMethods:
 
 
 # Running
-
-
 def _evaluate(
     task: Task, adapter: eval_adapter.Adapter, batch_size: int, progress: bool
 ) -> Dict[str, Any]:
@@ -220,11 +217,14 @@ def run_one(xp: Experiment, progress: bool = True) -> Outcome:
             project=WANDB_PROJECT,
             reinit=True,
         )
-    adapter = eval_adapter.Adapter.from_pretrained(
-        xp.model, dtype=getattr(torch, xp.execution.dtype)
-    )
+    adapter = eval_adapter.Adapter.from_pretrained(xp.model, dtype=getattr(torch, xp.execution.dtype))
     adapter.model = SparsityMethods.apply(xp.sparsity, adapter.model)
-    adapter.model.to(torch.device(xp.execution.device))
+    
+    if "cuda" in str(xp.execution.device) and torch.cuda.device_count()>1:
+        adapter.model = pipelined_models.pipeline_model(adapter.model)
+    else:
+        adapter.model.to(torch.device(xp.execution.device))
+
     out = {}
     out["parameters"] = sum(p.nelement() for p in adapter.model.parameters())
     out["model_config"] = adapter.model.config.to_diff_dict()

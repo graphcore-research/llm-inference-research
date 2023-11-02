@@ -234,9 +234,6 @@ class LlamaAttentionWithANN(LlamaAttention):
 
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-        # print(query_states.shape)
-        
         # Only enable ANN during autoregressive generation
         if query_states.shape[-2] == 1:
             ann_mask = self.ann(query_states, key_states, attention_mask)
