@@ -23,7 +23,7 @@ def test_ann_module() -> None:
 
     for score, add_remainder in [
         (ann.LowRank.Settings(8), False),
-        (ann.SparseQ.Settings(6), "v2"),
+        (ann.SparseQ.Settings(6), "v3"),
     ]:
         module = ann.ANN(
             ann.Settings(
@@ -51,7 +51,7 @@ def test_ann_module() -> None:
 def test_gptneox_ann() -> None:
     module = ann.GPTNeoXAttentionWithANN(
         GPTNeoXConfig(hidden_size=128, num_attention_heads=4),
-        ann.Settings(k=8, local_k=2, add_remainder="v2", score="sparse_q", rank=12),
+        ann.Settings(k=8, local_k=2, add_remainder="v3", score="sparse_q", rank=12),
     )
     output, _, weights = module(
         torch.randn(13, 1, 128),
@@ -68,7 +68,7 @@ def test_gptneox_ann() -> None:
 def test_llama_ann() -> None:
     module = ann.LlamaAttentionWithANN(
         LlamaConfig(hidden_size=128, num_attention_heads=4, num_key_value_heads=4),
-        ann.Settings(k=8, local_k=2, add_remainder="v2", score="sparse_q", rank=12),
+        ann.Settings(k=8, local_k=2, add_remainder="v3", score="sparse_q", rank=12),
     )
     output, weights, _ = module(
         torch.randn(13, 1, 128),

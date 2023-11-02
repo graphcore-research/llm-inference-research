@@ -70,12 +70,22 @@ class SparseQ(nn.Module):
         """
         assert query.shape[-2] == 1, "no support for multiple queries"
         head_size = query.shape[-1]
-        components = query.abs().topk(dim=-1, k=self.settings.rank).indices
-        query_proj = query.gather(-1, components)
+        topk = query.abs().topk(dim=-1, k=self.settings.rank)
+        query_proj = query.gather(-1, topk.indices)
         key_proj = key.gather(
-            -1, components.expand(key.shape[:-1] + (self.settings.rank,))
+            -1, topk.indices.expand(key.shape[:-1] + (self.settings.rank,))
         )
-        return cast(Tensor, query_proj @ key_proj.transpose(-1, -2) * head_size**-0.5)
+        # TODO: do not merge
+        # scale = head_size**0.5  # sqrt(128)
+        # scale = self.settings.rank**0.5  # sqrt(32)
+        scale = (  # from the coverage of the top `rank` components of `query`
+            topk.values.sum(-1)
+            .div_(query.abs().sum(-1))
+            .mul_(head_size)
+            .pow_(0.5)
+            .unsqueeze(-1)
+        )
+        return (query_proj @ key_proj.transpose(-1, -2)).div_(scale)
 
 
 ScoreSettings = Union[LowRank.Settings, SparseQ.Settings]
@@ -85,7 +95,7 @@ ScoreSettings = Union[LowRank.Settings, SparseQ.Settings]
 class Settings:
     k: int
     local_k: int
-    add_remainder: Union[bool, str]  # False | "v2"
+    add_remainder: Union[bool, str]  # False | "v3"
     score: ScoreSettings
 
     def __init__(
@@ -210,9 +220,9 @@ class ANN(nn.Module):
         mean_value = ((value * value_mask).sum(-2) / value_mask.sum(-2)).unsqueeze(-2)
         kv_weight = torch.tensor(1.0)
         if self.settings.add_remainder:
-            assert self.settings.add_remainder == "v2"
-            kv_weight = (gather(torch.softmax(score, -1), -1, indices).sum(-1)).to(
-                value.dtype
+            assert self.settings.add_remainder == "v3"
+            kv_weight = (
+                gather(torch.softmax(score, -1), -1, indices).sum(-1).to(value.dtype)
             )
 
         # Slice key, value, logmask for attention
@@ -293,7 +303,9 @@ def convert_module(
             if replacement is not child:
                 if result is original:
                     result = copy.copy(original)
-                setattr(result, name, replacement)
+                    # Copy _modules, otherwise add_module() modifies `original`
+                    result._modules = original._modules.copy()
+                result.add_module(name, replacement)
         return result
 
     return _convert(model)
