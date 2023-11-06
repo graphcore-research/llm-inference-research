@@ -9,7 +9,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, cast, Tuple
+from typing import Any, Dict, List, Optional, Union, cast
 
 import torch
 import tqdm
@@ -61,7 +61,7 @@ class Sparsity:
         self.name = name
         self.__dict__.update(kwargs)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return str(self.__dict__)
 
 
@@ -107,6 +107,7 @@ class Experiment:
 
 
 Outcome = Dict[str, Any]
+
 
 # Method
 class SparsityMethods:
@@ -217,10 +218,12 @@ def run_one(xp: Experiment, progress: bool = True) -> Outcome:
             project=WANDB_PROJECT,
             reinit=True,
         )
-    adapter = eval_adapter.Adapter.from_pretrained(xp.model, dtype=getattr(torch, xp.execution.dtype))
+    adapter = eval_adapter.Adapter.from_pretrained(
+        xp.model, dtype=getattr(torch, xp.execution.dtype)
+    )
     adapter.model = SparsityMethods.apply(xp.sparsity, adapter.model)
-    
-    if "cuda" in str(xp.execution.device) and torch.cuda.device_count()>1:
+
+    if "cuda" in str(xp.execution.device) and torch.cuda.device_count() > 1:
         adapter.model = pipelined_models.pipeline_model(adapter.model)
     else:
         adapter.model.to(torch.device(xp.execution.device))
