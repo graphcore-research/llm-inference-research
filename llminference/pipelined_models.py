@@ -106,13 +106,12 @@ def pipeline_gptneox(model: GPTNeoXForCausalLM) -> GPTNeoXForCausalLM:
     return model
 
 
-def pipeline_model(model: nn.Module) -> nn.Module:
+def pipeline_model(model: nn.Module, num_stages: int) -> nn.Module:
     model_name = cast(str, model.config._name_or_path)  # type:ignore[union-attr]
-    num_gpus = torch.cuda.device_count()
     num_hidden_layers = cast(
         int, model.config.num_hidden_layers  # type:ignore[union-attr]
     )
-    partition_len = ((num_hidden_layers - 1) // num_gpus) + 1
+    partition_len = ((num_hidden_layers - 1) // num_stages) + 1
     gpu_allocation = [i // partition_len for i in range(num_hidden_layers)]
     if "llama" in model_name:
         model = pipeline_llama(model)
@@ -120,8 +119,8 @@ def pipeline_model(model: nn.Module) -> nn.Module:
         trunk = cast(nn.Module, model.model.layers)  # type:ignore[union-attr]
         for idx, (_, layer) in enumerate(trunk.named_children()):
             layer.cuda(gpu_allocation[idx])
-        model.model.norm.cuda(num_gpus - 1)  # type:ignore[union-attr]
-        model.lm_head.cuda(num_gpus - 1)
+        model.model.norm.cuda(num_stages - 1)  # type:ignore[union-attr]
+        model.lm_head.cuda(num_stages - 1)
     elif "pythia" in model_name:
         model = pipeline_gptneox(model)
         model.gpt_neox.embed_in.cuda(0)  # type:ignore[union-attr]
@@ -129,8 +128,8 @@ def pipeline_model(model: nn.Module) -> nn.Module:
         trunk = cast(nn.Module, model.gpt_neox.layers)  # type:ignore[union-attr]
         for idx, (_, layer) in enumerate(trunk.named_children()):
             layer.cuda(gpu_allocation[idx])
-        model.gpt_neox.final_layer_norm.cuda(num_gpus - 1)  # type:ignore[union-attr]
-        model.embed_out.cuda(num_gpus - 1)
+        model.gpt_neox.final_layer_norm.cuda(num_stages - 1)  # type:ignore[union-attr]
+        model.embed_out.cuda(num_stages - 1)
     else:
         raise ValueError
     return model

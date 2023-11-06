@@ -70,15 +70,18 @@ class Execution:
     device: str
     dtype: str
     batch_size: int
+    pipeline_stages: int
     wandb: Union[bool, str]  # False | True | "offline"
 
     @classmethod
     def auto(cls, batch_size: Optional[int] = None) -> "Execution":
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        pipeline_stages = torch.cuda.device_count() if device == "cuda" else 1
         return cls(
             device=device,
             dtype=dict(cpu="float32", cuda="float16")[device],
             batch_size=batch_size or dict(cpu=10, cuda=5)[device],
+            pipeline_stages=pipeline_stages,
             wandb=True,
         )
 
@@ -222,9 +225,10 @@ def run_one(xp: Experiment, progress: bool = True) -> Outcome:
         xp.model, dtype=getattr(torch, xp.execution.dtype)
     )
     adapter.model = SparsityMethods.apply(xp.sparsity, adapter.model)
-
-    if "cuda" in str(xp.execution.device) and torch.cuda.device_count() > 1:
-        adapter.model = pipelined_models.pipeline_model(adapter.model)
+    if xp.execution.pipeline_stages > 1:
+        adapter.model = pipelined_models.pipeline_model(
+            adapter.model, xp.execution.pipeline_stages
+        )
     else:
         adapter.model.to(torch.device(xp.execution.device))
 
