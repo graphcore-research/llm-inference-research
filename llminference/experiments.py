@@ -22,6 +22,7 @@ from . import (
     ann_attention,
     eval_adapter,
     eviction_attention,
+    pipelined_models,
     qa,
     sparse_attention,
     summarisation,
@@ -69,15 +70,18 @@ class Execution:
     device: str
     dtype: str
     batch_size: int
+    pipeline_stages: int
     wandb: Union[bool, str]  # False | True | "offline"
 
     @classmethod
     def auto(cls, batch_size: Optional[int] = None) -> "Execution":
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        pipeline_stages = torch.cuda.device_count() if device == "cuda" else 1
         return cls(
             device=device,
             dtype=dict(cpu="float32", cuda="float16")[device],
             batch_size=batch_size or dict(cpu=10, cuda=5)[device],
+            pipeline_stages=pipeline_stages,
             wandb=True,
         )
 
@@ -107,9 +111,8 @@ class Experiment:
 
 Outcome = Dict[str, Any]
 
+
 # Method
-
-
 class SparsityMethods:
     @classmethod
     def apply(cls, sparsity: Sparsity, model: PreTrainedModel) -> PreTrainedModel:
@@ -139,14 +142,19 @@ class SparsityMethods:
         )
 
     @staticmethod
+    def eviction_llama(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
+        assert isinstance(model, LlamaForCausalLM)
+        return eviction_attention.convert_llama(
+            model, eviction_attention.Settings(**settings)
+        )
+
+    @staticmethod
     def ann(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
         assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
         return ann_attention.convert(model, ann_attention.Settings(**settings))
 
 
 # Running
-
-
 def _evaluate(
     task: Task, adapter: eval_adapter.Adapter, batch_size: int, progress: bool
 ) -> Dict[str, Any]:
@@ -212,7 +220,13 @@ def run_one(xp: Experiment, progress: bool = True) -> Outcome:
         xp.model, dtype=getattr(torch, xp.execution.dtype)
     )
     adapter.model = SparsityMethods.apply(xp.sparsity, adapter.model)
-    adapter.model.to(torch.device(xp.execution.device))
+    if xp.execution.pipeline_stages > 1:
+        adapter.model = pipelined_models.pipeline_model(
+            adapter.model, xp.execution.pipeline_stages
+        )
+    else:
+        adapter.model.to(torch.device(xp.execution.device))
+
     out = {}
     out["parameters"] = sum(p.nelement() for p in adapter.model.parameters())
     out["model_config"] = adapter.model.config.to_diff_dict()
