@@ -1,5 +1,6 @@
 """Generic utilities"""
 
+import copy
 import datetime
 import json
 import multiprocessing
@@ -25,6 +26,8 @@ from typing import (
 import datasets
 import torch
 import tqdm
+import transformers
+from torch import nn
 
 T = TypeVar("T")
 
@@ -151,3 +154,40 @@ def map_and_filter(
     Also, only return output columns from fn(), don't pass-through any original columns.
     """
     return map_full_batch(data, lambda rows: filter(None, map(fn, rows)))
+
+
+def convert_module(
+    model: nn.Module, replace: Callable[[nn.Module], Optional[nn.Module]]
+) -> nn.Module:
+    """Generic recursive module conversion."""
+
+    def _convert(original: nn.Module) -> nn.Module:
+        replacement = replace(original)
+        if replacement is not None:
+            replacement.to(next(original.parameters()).dtype)
+            replacement.load_state_dict(original.state_dict(), strict=False)
+            return replacement
+
+        # Recursive (lazy) copy
+        result = original
+        for name, child in original.named_children():
+            replacement = _convert(child)
+            if replacement is not child:
+                if result is original:
+                    result = copy.copy(original)
+                    # Copy _modules, otherwise add_module() modifies `original`
+                    result._modules = original._modules.copy()
+                result.add_module(name, replacement)
+        return result
+
+    return _convert(model)
+
+
+TRANSFORMERS_VERSION = "4.32.1"
+
+
+def check_transformers_version(type: type) -> None:
+    assert transformers.__version__ == TRANSFORMERS_VERSION, (
+        f"{type.__name__} is version-locked to"
+        f" transformers=={TRANSFORMERS_VERSION} for your safety"
+    )

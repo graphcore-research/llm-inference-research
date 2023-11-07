@@ -1,8 +1,7 @@
 """Approximate nearest neighbour methods that approximate `Q @ K.T`."""
 
-import copy
 from dataclasses import dataclass
-from typing import Any, Callable, List, Optional, Tuple, Union, cast
+from typing import Any, List, Optional, Tuple, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -14,7 +13,7 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaAttention, LlamaForCausalLM
 
-from . import llama_attention, sparse_attention
+from . import llama_attention, sparse_attention, utility
 
 
 class LowRank(nn.Module):
@@ -75,10 +74,13 @@ class SparseQ(nn.Module):
         key_proj = key.gather(
             -1, topk.indices.expand(key.shape[:-1] + (self.settings.rank,))
         )
-        # TODO: do not merge
-        # scale = head_size**0.5  # sqrt(128)
-        # scale = self.settings.rank**0.5  # sqrt(32)
-        scale = (  # from the coverage of the top `rank` components of `query`
+        # Scale could be:
+        #  - sqrt(head_size) -- if we think our approximation is exact
+        #  - sqrt(rank)      -- if our approximation is no better than random
+        #  - sqrt(q_coverage * head_size) -- used below
+        #       q_coverage estimates the variance of Q K^T from the approximated
+        #       product, and the L1 coverage of Q by the topk components
+        scale = (
             topk.values.sum(-1)
             .div_(query.abs().sum(-1))
             .mul_(head_size)
@@ -95,14 +97,14 @@ ScoreSettings = Union[LowRank.Settings, SparseQ.Settings]
 class Settings:
     k: int
     local_k: int
-    add_remainder: Union[bool, str]  # False | "v3"
+    reallocate_to_mean_value: bool
     score: ScoreSettings
 
     def __init__(
         self,
         k: int,
         local_k: int,
-        add_remainder: Union[bool, str],
+        reallocate_to_mean_value: bool,
         score: Union[ScoreSettings, str],
         **args: Any,
     ):
@@ -118,7 +120,7 @@ class Settings:
             score_settings = score
         self.k = k
         self.local_k = local_k
-        self.add_remainder = add_remainder
+        self.reallocate_to_mean_value = reallocate_to_mean_value
         self.score = score_settings
 
 
@@ -168,11 +170,10 @@ class ANN(nn.Module):
 
         mean_value -- (batch, n_heads, n_query, head_size)
         """
-        weights = torch.softmax(
-            (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask),
-            -1,
-            dtype=torch.float32,
-        ).to(value.dtype)
+        scores = (
+            (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask)
+        )
+        weights = torch.softmax(scores, -1, dtype=torch.float32).to(value.dtype)
         # Value-mixing with reallocation
         weights *= kv_weight[..., None]
         output = weights @ value
@@ -219,8 +220,7 @@ class ANN(nn.Module):
         value_mask = logmask.squeeze(-2).unsqueeze(-1).exp()
         mean_value = ((value * value_mask).sum(-2) / value_mask.sum(-2)).unsqueeze(-2)
         kv_weight = torch.tensor(1.0)
-        if self.settings.add_remainder:
-            assert self.settings.add_remainder == "v3"
+        if self.settings.reallocate_to_mean_value:
             kv_weight = (
                 gather(torch.softmax(score, -1), -1, indices).sum(-1).to(value.dtype)
             )
@@ -240,6 +240,7 @@ class ANN(nn.Module):
 
 class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
     def __init__(self, config: GPTNeoXConfig, settings: Settings):
+        utility.check_transformers_version(type(self))
         super().__init__(config)
         self.ann = ANN(settings, self.num_attention_heads, self.head_size)
 
@@ -270,6 +271,7 @@ class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
 
 class LlamaAttentionWithANN(llama_attention.LlamaAttention):
     def __init__(self, config: LlamaConfig, settings: Settings):
+        utility.check_transformers_version(type(self))
         super().__init__(config)
         self.settings = settings
         self.ann = ANN(settings, self.num_heads, self.head_dim)
@@ -284,33 +286,6 @@ class LlamaAttentionWithANN(llama_attention.LlamaAttention):
         return super()._attn(query, key, value, logmask)
 
 
-def convert_module(
-    model: nn.Module, replace: Callable[[nn.Module], Optional[nn.Module]]
-) -> nn.Module:
-    """Generic recursive module conversion."""
-
-    def _convert(original: nn.Module) -> nn.Module:
-        replacement = replace(original)
-        if replacement is not None:
-            replacement.to(next(original.parameters()).dtype)
-            replacement.load_state_dict(original.state_dict(), strict=False)
-            return replacement
-
-        # Recursive (lazy) copy
-        result = original
-        for name, child in original.named_children():
-            replacement = _convert(child)
-            if replacement is not child:
-                if result is original:
-                    result = copy.copy(original)
-                    # Copy _modules, otherwise add_module() modifies `original`
-                    result._modules = original._modules.copy()
-                result.add_module(name, replacement)
-        return result
-
-    return _convert(model)
-
-
 def convert(
     model: Union[GPTNeoXForCausalLM, LlamaForCausalLM], settings: Settings
 ) -> Union[GPTNeoXForCausalLM, LlamaForCausalLM]:
@@ -322,4 +297,4 @@ def convert(
         if isinstance(m, LlamaAttention):
             return LlamaAttentionWithANN(model.config, settings)
 
-    return convert_module(model, _replace)
+    return utility.convert_module(model, _replace)

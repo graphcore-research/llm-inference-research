@@ -136,15 +136,8 @@ class SparsityMethods:
 
     @staticmethod
     def eviction(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, GPTNeoXForCausalLM)
-        return eviction_attention.convert_gptneox(
-            model, eviction_attention.Settings(**settings)
-        )
-
-    @staticmethod
-    def eviction_llama(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, LlamaForCausalLM)
-        return eviction_attention.convert_llama(
+        assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
+        return eviction_attention.convert(
             model, eviction_attention.Settings(**settings)
         )
 

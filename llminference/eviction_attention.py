@@ -12,15 +12,12 @@ Rough usage:
 
 See: H20 (https://arxiv.org/abs/2306.14048)
 """
-import copy
-import math
+
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator, List, Optional, Tuple, Union
+from typing import Iterator, List, Optional, Tuple, Union
 
 import torch
-import torch.nn.functional as F
-import transformers
 from torch import Tensor, nn
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.gpt_neox.modeling_gpt_neox import (
@@ -28,14 +25,9 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
     GPTNeoXForCausalLM,
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
-from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
-    LlamaForCausalLM,
-    apply_rotary_pos_emb,
-    repeat_kv,
-)
+from transformers.models.llama.modeling_llama import LlamaAttention, LlamaForCausalLM
 
-from . import sparse_attention
+from . import llama_attention, sparse_attention, utility
 
 
 @dataclass
@@ -80,7 +72,7 @@ class LRU:
         return self.last_used[..., :key_length]
 
 
-class Eviction:
+class EvictionMask:
     """Maintain a KV cache eviction mask for one attention layer & context.
 
     Note: `shape` should be `(batch_size, heads, max_k_length)`
@@ -138,21 +130,56 @@ class Eviction:
         )
 
 
-class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
-    TRANSFORMERS_VERSION = "4.32.1"
+class Eviction:
+    """Create/update/reset eviction mask state for a single attention layer."""
 
-    def __init__(self, config: GPTNeoXConfig, settings: Settings):
-        assert transformers.__version__ == self.TRANSFORMERS_VERSION, (
-            "GPTNeoXAttentionWithEviction is version-locked to"
-            f" transformers=={self.TRANSFORMERS_VERSION} for your safety"
-        )
-        super().__init__(config)
-        self.max_sequence_length = config.max_position_embeddings
-        self.eviction_settings = settings
-        self.enable_eviction = False
-        self.eviction: Optional[Eviction] = None
+    def __init__(self, settings: Settings, max_sequence_length: int):
+        self.settings = settings
+        self.max_sequence_length = max_sequence_length
+        self.enabled = False
+        self.eviction_mask: Optional[EvictionMask] = None
         # Set to an empty list to turn on eviction mask logging
-        self.eviction_masks: Optional[List[Tensor]] = None
+        self.log_masks: Optional[List[Tensor]] = None
+
+    def enable(self, enabled: bool) -> None:
+        self.enabled = enabled
+        if not self.enabled:
+            self.eviction_mask = None
+
+    def get_mask(self, attention_mask: Tensor) -> Tensor:
+        if not self.enabled or self.eviction_mask is None:
+            return attention_mask
+        eviction_mask = self.eviction_mask.mask[..., None, : attention_mask.shape[-1]]
+        if self.log_masks is not None:
+            self.log_masks.append(eviction_mask.clone())
+        # Apply the mask to remove previously evicted values
+        return attention_mask + torch.finfo(attention_mask.dtype).min * ~eviction_mask
+
+    def update(self, weights: Tensor, attention_mask: Tensor) -> None:
+        # When disabled or missing, reset eviction statistics
+        if self.eviction_mask is None or not self.enabled:
+            self.eviction_mask = EvictionMask(
+                self.settings,
+                weights.shape[:2] + (self.max_sequence_length,),
+                weights.device,
+            )
+        # Most of the code doesn't care about "junk" queries, but it could confuse
+        # eviction models, so we mask them out here, assuming that the last N values
+        # correspond to the last N queries
+        query_mask = sparse_attention.score_to_mask(
+            attention_mask[..., -weights.shape[2] :]
+        ).swapdims(-1, -2)
+        self.eviction_mask.update(
+            weights * query_mask,
+            sparse_attention.causal_index(attention_mask[:, :, -1, :]),
+        )
+
+
+class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
+    def __init__(self, config: GPTNeoXConfig, settings: Settings):
+        utility.check_transformers_version(type(self))
+        super().__init__(config)
+        self.eviction = Eviction(settings, config.max_position_embeddings)
 
     def _attn(
         self,
@@ -163,268 +190,55 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
         head_mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         assert attention_mask is not None
-
-        if self.eviction is None or not self.enable_eviction:
-            # When disabled or missing, we should reset eviction statistics
-            self.eviction = Eviction(
-                self.eviction_settings,
-                key.shape[:2] + (self.max_sequence_length,),
-                key.device,
-            )
-
-        modified_attention_mask = attention_mask
-        if self.enable_eviction:
-            eviction_mask = self.eviction.mask[..., None, : attention_mask.shape[-1]]
-            if self.eviction_masks is not None:
-                self.eviction_masks.append(eviction_mask.clone())
-            # Apply the mask to remove previously evicted values
-            modified_attention_mask = (
-                attention_mask + torch.finfo(attention_mask.dtype).min * ~eviction_mask
-            )
-
         output, weights = super()._attn(
-            query, key, value, modified_attention_mask, head_mask
+            query, key, value, self.eviction.get_mask(attention_mask), head_mask
         )
-        # Most of the code doesn't care about "junk" queries, but it could confuse
-        # eviction models, so we mask them out here, assuming that the last N values
-        # correspond to the last N queries
-        weights *= sparse_attention.score_to_mask(
-            attention_mask[..., -weights.shape[2] :]
-        ).swapdims(-1, -2)
-        self.eviction.update(
-            weights, sparse_attention.causal_index(attention_mask.squeeze(2))
-        )
+        self.eviction.update(weights, attention_mask)
         return output, weights
 
 
-class LlamaAttentionWithEviction(LlamaAttention):  # type:ignore[misc]
-    TRANSFORMERS_VERSION = "4.32.1"
-
+class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
     def __init__(self, config: LlamaConfig, settings: Settings):
-        assert transformers.__version__ == self.TRANSFORMERS_VERSION, (
-            "LlamaAttentionWithEviction is version-locked to"
-            f" transformers=={self.TRANSFORMERS_VERSION} for your safety"
-        )
+        utility.check_transformers_version(type(self))
         super().__init__(config)
-        self.max_sequence_length = config.max_position_embeddings
-        self.eviction_settings = settings
-        self.enable_eviction = False
-        self.eviction: Optional[Eviction] = None
-        # Set to an empty list to turn on eviction mask logging
-        self.eviction_masks: Optional[List[Tensor]] = None
+        self.eviction = Eviction(settings, config.max_position_embeddings)
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        bsz, q_len, _ = hidden_states.size()
-
-        if self.config.pretraining_tp > 1:
-            key_value_slicing = (
-                self.num_key_value_heads * self.head_dim
-            ) // self.config.pretraining_tp
-            query_slices = self.q_proj.weight.split(
-                (self.num_heads * self.head_dim) // self.config.pretraining_tp, dim=0
-            )
-            key_slices = self.k_proj.weight.split(key_value_slicing, dim=0)
-            value_slices = self.v_proj.weight.split(key_value_slicing, dim=0)
-
-            query_states = [
-                F.linear(hidden_states, query_slices[i])
-                for i in range(self.config.pretraining_tp)
-            ]
-            query_states = torch.cat(query_states, dim=-1)
-
-            key_states = [
-                F.linear(hidden_states, key_slices[i])
-                for i in range(self.config.pretraining_tp)
-            ]
-            key_states = torch.cat(key_states, dim=-1)
-
-            value_states = [
-                F.linear(hidden_states, value_slices[i])
-                for i in range(self.config.pretraining_tp)
-            ]
-            value_states = torch.cat(value_states, dim=-1)
-
-        else:
-            query_states = self.q_proj(hidden_states)
-            key_states = self.k_proj(hidden_states)
-            value_states = self.v_proj(hidden_states)
-        query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-        value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-
-        kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos, sin, position_ids
+    def _attn(
+        self, query: Tensor, key: Tensor, value: Tensor, attention_mask: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        output, weights = super()._attn(
+            query, key, value, self.eviction.get_mask(attention_mask)
         )
-
-        if past_key_value is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
-
-        past_key_value = (key_states, value_states) if use_cache else None
-
-        # repeat k/v heads if n_kv_heads < n_heads
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
-
-        if self.eviction is None or not self.enable_eviction:
-            # When disabled or missing, we should reset eviction statistics
-            self.eviction = Eviction(
-                self.eviction_settings,
-                key_states.shape[:2] + (self.max_sequence_length,),
-                key_states.device,
-            )
-
-        modified_attention_mask = attention_mask
-        if self.enable_eviction:
-            eviction_mask = self.eviction.mask[..., None, : attention_mask.shape[-1]]
-            if self.eviction_masks is not None:
-                self.eviction_masks.append(eviction_mask.clone())
-            # Apply the mask to remove previously evicted values
-            modified_attention_mask = (
-                attention_mask + torch.finfo(attention_mask.dtype).min * ~eviction_mask
-            )
-
-        attn_weights = torch.matmul(
-            query_states, key_states.transpose(2, 3)
-        ) / math.sqrt(self.head_dim)
-
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                "Attention weights should be of size"
-                f" {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
-        if modified_attention_mask is not None:
-            attn_weights = attn_weights + modified_attention_mask
-
-        # upcast attention to fp32
-        attn_weights = nn.functional.softmax(
-            attn_weights, dim=-1, dtype=torch.float32
-        ).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states)
-
-        attn_weights *= sparse_attention.score_to_mask(
-            attention_mask[..., -attn_weights.shape[2] :]
-        ).swapdims(-1, -2)
-        self.eviction.update(
-            attn_weights, sparse_attention.causal_index(attention_mask[:, :, -1, :])
-        )
-
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
-            raise ValueError(
-                "`attn_output` should be of size"
-                f" {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
-            )
-
-        attn_output = attn_output.transpose(1, 2).contiguous()
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
-
-        if self.config.pretraining_tp > 1:
-            attn_output = attn_output.split(
-                self.hidden_size // self.config.pretraining_tp, dim=2
-            )
-            o_proj_slices = self.o_proj.weight.split(
-                self.hidden_size // self.config.pretraining_tp, dim=1
-            )
-            attn_output = sum(
-                [
-                    F.linear(attn_output[i], o_proj_slices[i])
-                    for i in range(self.config.pretraining_tp)
-                ]
-            )
-        else:
-            attn_output = self.o_proj(attn_output)
-
-        if not output_attentions:
-            attn_weights = None
-
-        return attn_output, attn_weights, past_key_value
+        self.eviction.update(weights, attention_mask)
+        return output, weights
 
 
 @contextmanager
 def generation_context(model: GPTNeoXForCausalLM) -> Iterator[GPTNeoXForCausalLM]:
     """(Context manager) enable KV eviction during this scope."""
-    attns = [m for m in model.modules() if isinstance(m, GPTNeoXAttentionWithEviction)]
+    attns = [
+        m
+        for m in model.modules()
+        if isinstance(m, (GPTNeoXAttentionWithEviction, LlamaAttentionWithEviction))
+    ]
     for m in attns:
-        assert not m.enable_eviction
-        m.enable_eviction = True
+        m.eviction.enable(True)
     yield model
     for m in attns:
-        m.enable_eviction = False
-        m.eviction = None
+        m.eviction.enable(False)
 
 
-@contextmanager
-def generation_context_llama(model: LlamaForCausalLM) -> Iterator[LlamaForCausalLM]:
-    """(Context manager) enable KV eviction during this scope."""
-    attns = [m for m in model.modules() if isinstance(m, LlamaAttentionWithEviction)]
-    for m in attns:
-        assert not m.enable_eviction
-        m.enable_eviction = True
-    yield model
-    for m in attns:
-        m.enable_eviction = False
-        m.eviction = None
+def convert(
+    model: Union[GPTNeoXForCausalLM, LlamaForCausalLM], settings: Settings
+) -> Union[GPTNeoXForCausalLM, LlamaForCausalLM]:
+    """Convert the model to use (simulated) KV cache eviction during generation."""
 
+    def _replace(m: nn.Module) -> Optional[nn.Module]:
+        if isinstance(m, GPTNeoXAttention):
+            return GPTNeoXAttentionWithEviction(model.config, settings)
+        if isinstance(m, LlamaAttention):
+            return LlamaAttentionWithEviction(model.config, settings)
 
-def convert_gptneox(
-    model: GPTNeoXForCausalLM, settings: Settings
-) -> GPTNeoXForCausalLM:
-    """Convert a GPT-NeoX model to use (simulated) KV cache eviction during generation.
-
-    Note that the returned model should use `with generation_context(model)` during
-    autoregressive generation to enable eviction.
-    """
-
-    def _convert(m: nn.Module, **args: Any) -> None:
-        for name, child in m.named_children():
-            if isinstance(child, GPTNeoXAttention):
-                replacement = GPTNeoXAttentionWithEviction(**args)
-                replacement.to(next(child.parameters()).dtype)
-                replacement.load_state_dict(child.state_dict())
-                setattr(m, name, replacement)
-            _convert(child, **args)
-
-    model = copy.deepcopy(model)
-    _convert(model, config=model.config, settings=settings)
-    model.generation_context = generation_context
-    return model
-
-
-def convert_llama(model: LlamaForCausalLM, settings: Settings) -> LlamaForCausalLM:
-    """Convert a Llama model to use (simulated) KV cache compression using ANN."""
-
-    def _convert(m: nn.Module, **args: Any) -> None:
-        for name, child in m.named_children():
-            if isinstance(child, LlamaAttention):
-                replacement = LlamaAttentionWithEviction(**args)
-                replacement.to(next(child.parameters()).dtype)
-                replacement.load_state_dict(child.state_dict(), strict=False)
-                setattr(m, name, replacement)
-            _convert(child, **args)
-
-    model = copy.deepcopy(model)
-    _convert(model, config=model.config, settings=settings)
-    model.generation_context = generation_context_llama
+    model = utility.convert_module(model, _replace)
+    model.generation_context = generation_context  # type:ignore[assignment]
     return model

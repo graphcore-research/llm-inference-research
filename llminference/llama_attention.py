@@ -32,7 +32,7 @@ class LlamaAttention(modeling_llama.LlamaAttention):
         bsz, _, q_len, _ = query_states.shape
         _, _, kv_seq_len, _ = key_states.shape
 
-        # MODIFIED (moved)
+        # MODIFIED (moved from forward())...
         attn_weights = torch.matmul(
             query_states, key_states.transpose(2, 3)
         ) / math.sqrt(self.head_dim)
@@ -44,10 +44,11 @@ class LlamaAttention(modeling_llama.LlamaAttention):
             )
 
         if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-                )
+            # MODIFIED (commented out)
+            # if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
+            #     raise ValueError(
+            #         f"Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
+            #     )
             attn_weights = attn_weights + attention_mask
 
         # upcast attention to fp32

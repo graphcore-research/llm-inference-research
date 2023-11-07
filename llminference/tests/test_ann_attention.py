@@ -8,6 +8,19 @@ from .. import ann_attention as ann
 from .. import eval_adapter
 
 
+def test_gather() -> None:
+    table = torch.arange(20).reshape(2, 5, 2)
+    indices = torch.tensor([[0, 0, 4, 4, 2], [1, 1, 1, 1, 1]])[:, :, None]
+    expected = torch.tensor(
+        [
+            [[0, 1], [0, 1], [8, 9], [8, 9], [4, 5]],
+            [[12, 13], [12, 13], [12, 13], [12, 13], [12, 13]],
+        ]
+    )
+    torch.testing.assert_close(ann.gather(table, 1, indices), expected)
+    torch.testing.assert_close(ann.gather(table, -2, indices), expected)
+
+
 def test_ann_module() -> None:
     batch, n_heads, n_key, head_size = (3, 5, 7, 16)
     query = torch.randn((batch, n_heads, 1, head_size))
@@ -21,15 +34,15 @@ def test_ann_module() -> None:
     key.masked_fill_(~mask[:, :, 0, :, None], 1e9)
     value.masked_fill_(~mask[:, :, 0, :, None], float("inf"))
 
-    for score, add_remainder in [
+    for score, reallocate_to_mean_value in [
         (ann.LowRank.Settings(8), False),
-        (ann.SparseQ.Settings(6), "v3"),
+        (ann.SparseQ.Settings(6), True),
     ]:
         module = ann.ANN(
             ann.Settings(
                 k=4,
                 local_k=1,
-                add_remainder=cast(bool, add_remainder),
+                reallocate_to_mean_value=reallocate_to_mean_value,
                 score=cast(ann.ScoreSettings, score),
             ),
             n_heads,
@@ -42,16 +55,18 @@ def test_ann_module() -> None:
         # At most 4 nonzeros per (batch, head), but may be fewer (due to the mask)
         assert ((weights != 0).sum(-1) == mask.sum(-1).minimum(torch.tensor(4))).all()
         assert (weights[..., -1] != 0).all(), "local_k"
-        if add_remainder:
+        if reallocate_to_mean_value:
             assert (weights.sum(-1) <= 1.00001).all()
         else:
             torch.testing.assert_close(weights.sum(-1), torch.ones((batch, n_heads, 1)))
 
 
-def test_gptneox_ann() -> None:
+def test_gptneox_with_ann() -> None:
     module = ann.GPTNeoXAttentionWithANN(
         GPTNeoXConfig(hidden_size=128, num_attention_heads=4),
-        ann.Settings(k=8, local_k=2, add_remainder="v3", score="sparse_q", rank=12),
+        ann.Settings(
+            k=8, local_k=2, reallocate_to_mean_value=True, score="sparse_q", rank=12
+        ),
     )
     output, _, weights = module(
         torch.randn(13, 1, 128),
@@ -61,14 +76,16 @@ def test_gptneox_ann() -> None:
         output_attentions=True,
     )
     assert output.shape == (13, 1, 128)
-    assert ((-1e3 <= output) & (output <= 1e3)).all()  # "reasonable" outputs
-    assert ((weights != 0).sum(-1) == 8).all()
+    assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
+    assert ((weights != 0).sum(-1) == 8).all(), "sparse attention"
 
 
-def test_llama_ann() -> None:
+def test_llama_with_ann() -> None:
     module = ann.LlamaAttentionWithANN(
         LlamaConfig(hidden_size=128, num_attention_heads=4, num_key_value_heads=4),
-        ann.Settings(k=8, local_k=2, add_remainder="v3", score="sparse_q", rank=12),
+        ann.Settings(
+            k=8, local_k=2, reallocate_to_mean_value=True, score="sparse_q", rank=12
+        ),
     )
     output, weights, _ = module(
         torch.randn(13, 1, 128),
@@ -78,8 +95,8 @@ def test_llama_ann() -> None:
         output_attentions=True,
     )
     assert output.shape == (13, 1, 128)
-    assert ((-1e3 <= output) & (output <= 1e3)).all()  # "reasonable" outputs
-    assert ((weights != 0).sum(-1) == 8).all()
+    assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
+    assert ((weights != 0).sum(-1) == 8).all(), "sparse attention"
 
 
 def test_convert_gptneox() -> None:
@@ -90,7 +107,10 @@ def test_convert_gptneox() -> None:
     ann_model = ann.convert(
         adapter.model,
         ann.Settings(
-            k=8, local_k=2, add_remainder=False, score=ann.LowRank.Settings(64)
+            k=8,
+            local_k=2,
+            reallocate_to_mean_value=False,
+            score=ann.LowRank.Settings(64),
         ),
     )
     for layer in ann_model.gpt_neox.layers:

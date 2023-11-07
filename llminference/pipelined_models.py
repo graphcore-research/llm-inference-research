@@ -1,5 +1,4 @@
-import copy
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Optional, Tuple, Union, cast
 
 import torch
 from torch import nn
@@ -8,6 +7,8 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
     GPTNeoXLayer,
 )
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM
+
+from . import utility
 
 
 class PipelinedLlamaDecoderLayer(LlamaDecoderLayer):  # type:ignore[misc]
@@ -72,64 +73,40 @@ class PipelinedGPTNeoXLayer(GPTNeoXLayer):  # type:ignore[misc]
         )
 
 
-def pipeline_llama(model: LlamaForCausalLM) -> LlamaForCausalLM:
-    """Convert a Llama model to use pipelined layers."""
+def pipeline_model(
+    model: Union[GPTNeoXForCausalLM, LlamaForCausalLM], num_stages: int
+) -> Union[GPTNeoXForCausalLM, LlamaForCausalLM]:
+    """Convert a GPTNeoX or Llama model to use pipelining."""
 
-    def _convert(m: torch.nn.Module, **args: Any) -> None:
-        for name, child in m.named_children():
-            if isinstance(child, LlamaDecoderLayer):
-                replacement = PipelinedLlamaDecoderLayer(**args)
-                replacement.to(next(child.parameters()).dtype)
-                replacement.load_state_dict(child.state_dict(), strict=False)
-                setattr(m, name, replacement)
-            _convert(child, **args)
+    def _replace(m: nn.Module) -> Optional[nn.Module]:
+        if isinstance(m, GPTNeoXLayer):
+            return PipelinedGPTNeoXLayer(model.config)
+        if isinstance(m, LlamaDecoderLayer):
+            return PipelinedLlamaDecoderLayer(model.config)
 
-    model = copy.deepcopy(model)
-    _convert(model, config=model.config)
-    return model
-
-
-def pipeline_gptneox(model: GPTNeoXForCausalLM) -> GPTNeoXForCausalLM:
-    """Convert a GPTNeoX model to use pipelined layers."""
-
-    def _convert(m: torch.nn.Module, **args: Any) -> None:
-        for name, child in m.named_children():
-            if isinstance(child, GPTNeoXLayer):
-                replacement = PipelinedGPTNeoXLayer(**args)
-                replacement.to(next(child.parameters()).dtype)
-                replacement.load_state_dict(child.state_dict(), strict=False)
-                setattr(m, name, replacement)
-            _convert(child, **args)
-
-    model = copy.deepcopy(model)
-    _convert(model, config=model.config)
-    return model
-
-
-def pipeline_model(model: nn.Module, num_stages: int) -> nn.Module:
-    model_name = cast(str, model.config._name_or_path)  # type:ignore[union-attr]
+    model = utility.convert_module(model, _replace)
     num_hidden_layers = cast(
         int, model.config.num_hidden_layers  # type:ignore[union-attr]
     )
     partition_len = ((num_hidden_layers - 1) // num_stages) + 1
     gpu_allocation = [i // partition_len for i in range(num_hidden_layers)]
-    if "llama" in model_name:
-        model = pipeline_llama(model)
-        model.model.embed_tokens.cuda(0)  # type:ignore[union-attr]
-        trunk = cast(nn.Module, model.model.layers)  # type:ignore[union-attr]
+
+    if isinstance(model, LlamaForCausalLM):
+        model.model.embed_tokens.cuda(0)
+        trunk = cast(nn.Module, model.model.layers)
         for idx, (_, layer) in enumerate(trunk.named_children()):
             layer.cuda(gpu_allocation[idx])
-        model.model.norm.cuda(num_stages - 1)  # type:ignore[union-attr]
+        model.model.norm.cuda(num_stages - 1)
         model.lm_head.cuda(num_stages - 1)
-    elif "pythia" in model_name:
-        model = pipeline_gptneox(model)
-        model.gpt_neox.embed_in.cuda(0)  # type:ignore[union-attr]
-        model.gpt_neox.emb_dropout.cuda(0)  # type:ignore[union-attr]
-        trunk = cast(nn.Module, model.gpt_neox.layers)  # type:ignore[union-attr]
+        return model
+    elif isinstance(model, GPTNeoXForCausalLM):
+        model.gpt_neox.embed_in.cuda(0)
+        model.gpt_neox.emb_dropout.cuda(0)
+        trunk = cast(nn.Module, model.gpt_neox.layers)
         for idx, (_, layer) in enumerate(trunk.named_children()):
             layer.cuda(gpu_allocation[idx])
-        model.gpt_neox.final_layer_norm.cuda(num_stages - 1)  # type:ignore[union-attr]
+        model.gpt_neox.final_layer_norm.cuda(num_stages - 1)
         model.embed_out.cuda(num_stages - 1)
+        return model
     else:
-        raise ValueError
-    return model
+        raise ValueError(f"Model class {type(model)} isn't supported")
