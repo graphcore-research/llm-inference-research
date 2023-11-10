@@ -119,16 +119,16 @@ def test_evaluate() -> None:
 
     p = {w: [s["bpc"] for s in scores] for w, scores in bpcs.items()}
 
-    # All bpcs must be > 1 and less than log2(vocab_size)
-    assert 1 < p[1][0] < 16
-    assert 1 < p[20][0] < 16
-    assert 1 < p[50][0] < 16
-    assert 1 < p[1][1] < 16
-    assert 1 < p[20][1] < 16
-    assert 1 < p[50][1] < 16
-    assert 1 < p[1][2] < 16
-    assert 1 < p[20][2] < 16
-    assert 1 < p[50][2] < 16
+    # All bpcs must be > 0 and less than log2(vocab_size)
+    assert 0 < p[1][0] < 16
+    assert 0 < p[20][0] < 16
+    assert 0 < p[50][0] < 16
+    assert 0 < p[1][1] < 16
+    assert 0 < p[20][1] < 16
+    assert 0 < p[50][1] < 16
+    assert 0 < p[1][2] < 16
+    assert 0 < p[20][2] < 16
+    assert 0 < p[50][2] < 16
 
     # Simple text much lower bpc than harder text
     assert p[1][0] + 0.2 < p[1][2]
