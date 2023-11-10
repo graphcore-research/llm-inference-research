@@ -1,30 +1,68 @@
-from math import exp, log
+from math import log2
 
 import numpy as np
 import torch
 
-from .. import perplexity
+from .. import bpc
 from ..eval_adapter import Adapter
 
 
 def test_wikitext() -> None:
-    data = perplexity.WikiText.data(warmup=200)
-    assert len(data) > 36_700 * 0.35  # ~40% of the original 36,700 rows are long enough
-    assert 200 <= np.mean([len(d["prefill"]) for d in data]) <= 205
+    data = bpc.WikiText.data(prefill_len=6000, reference_len=400)
+    assert len(data) >= 20_000
+    assert 6000 <= np.mean([len(d["prefill"]) for d in data]) <= 6050
+    assert 400 <= np.mean([len(d["reference"]) for d in data]) <= 405
     assert set(data.features) == {"prefill", "reference"}
 
 
-def test_calc_perplexity() -> None:
-    normalised_logits = torch.tensor([0.8, 0.2]).log()
-    p = perplexity.calc_perplexity(normalised_logits)
-    expected_p = exp(-0.5 * (log(0.8) + log(0.2)))
-    assert p == expected_p
+def test_wikitext_filter() -> None:
+    s = "example of a\ntest string !"  # length = 26
+
+    d = bpc.WikiText.preprocess(dict(page=s), prefill_len=0, reference_len=26 - 7)
+    assert d == dict(prefill="example", reference=" of a\ntest string !")
+
+    d = bpc.WikiText.preprocess(dict(page=s), prefill_len=0, reference_len=24 - 7)
+    assert d == dict(prefill="example", reference=" of a\ntest string")
+
+    d = bpc.WikiText.preprocess(dict(page=s), prefill_len=3, reference_len=24 - 7)
+    assert d == dict(prefill="example", reference=" of a\ntest string")
+
+    d = bpc.WikiText.preprocess(dict(page=s), prefill_len=10, reference_len=24 - 10)
+    assert d == dict(prefill="example of", reference=" a\ntest string")
+
+    d = bpc.WikiText.preprocess(dict(page=s), prefill_len=11, reference_len=24 - 12)
+    assert d == dict(prefill="example of a", reference="\ntest string")
+
+    d = bpc.WikiText.preprocess(dict(page=s), prefill_len=13, reference_len=24 - 17)
+    assert d == dict(prefill="example of a\ntest", reference=" string")
+
+    d = bpc.WikiText.preprocess(dict(page=s), prefill_len=1, reference_len=1)
+    assert d == dict(prefill="example", reference=" of")
+
+    d = bpc.WikiText.preprocess(dict(page="qwerty"), prefill_len=2, reference_len=10)
+    assert d is None
+
+    d = bpc.WikiText.preprocess(dict(page="qwerty "), prefill_len=2, reference_len=1)
+    assert d == dict(prefill="qwerty", reference=" ")
+
+    d = bpc.WikiText.preprocess(dict(page=" qwerty "), prefill_len=2, reference_len=1)
+    assert d == dict(prefill=" qwerty", reference=" ")
+
+    d = bpc.WikiText.preprocess(dict(page="    "), prefill_len=1, reference_len=2)
+    assert d == dict(prefill=" ", reference="  ")
+
+
+def test_calc_bpc() -> None:
+    nll = -torch.tensor([0.8, 0.2]).log()
+    p = bpc.calc_bpc(nll, torch.tensor([3]))
+    expected_p = -1 / 3 * (log2(0.8) + log2(0.2))
+    np.testing.assert_approx_equal(p.item(), expected_p)
 
     # Can handle padding & batching
-    padded_logits = torch.cat([normalised_logits, torch.zeros(10)])
-    logits = torch.stack([torch.randn(12), padded_logits])
-    p = perplexity.calc_perplexity(logits)
-    assert p[1] == expected_p
+    padded_nll = torch.cat([nll, torch.zeros(10)])
+    logits = torch.stack([torch.randn(12), padded_nll])
+    p = bpc.calc_bpc(logits, torch.tensor([20, 3]))
+    np.testing.assert_approx_equal(p[1].item(), expected_p)
 
 
 def test_evaluate() -> None:
@@ -56,9 +94,10 @@ def test_evaluate() -> None:
         ),
     ]
 
-    warmups = [1, 20, 50]
+    prefill_lens = [1, 20, 50]
     examples = {
-        w: [{"prefill": e[:w], "reference": e[w:]} for e in _examples] for w in warmups
+        w: [{"prefill": e[:w], "reference": e[w:]} for e in _examples]
+        for w in prefill_lens
     }
     prefill_lengths = {
         w: [len(adapter.tok_encode(item["prefill"])) for item in e]
@@ -68,41 +107,40 @@ def test_evaluate() -> None:
         w: [len(adapter.tok_encode(item["reference"])) for item in e]
         for w, e in examples.items()
     }
-    perplexities = {
-        w: list(perplexity.evaluate(adapter, examples[w], batch_size=2))
-        for w in warmups
+    bpcs = {
+        w: list(bpc.evaluate(adapter, examples[w], batch_size=2)) for w in prefill_lens
     }
 
     # Check correct prefill and reference length
-    for w, item in perplexities.items():
+    for w, item in bpcs.items():
         for d, c_len, g_len in zip(item, prefill_lengths[w], reference_lengths[w]):
             assert d["prefill_length"] == c_len
             assert d["reference_length"] == g_len
 
-    p = {w: [s["perplexity"] for s in scores] for w, scores in perplexities.items()}
+    p = {w: [s["bpc"] for s in scores] for w, scores in bpcs.items()}
 
-    # All perplexities must be > 1 and less than vocab size
-    assert 1 < p[1][0] < 50_000
-    assert 1 < p[20][0] < 50_000
-    assert 1 < p[50][0] < 50_000
-    assert 1 < p[1][1] < 50_000
-    assert 1 < p[20][1] < 50_000
-    assert 1 < p[50][1] < 50_000
-    assert 1 < p[1][2] < 50_000
-    assert 1 < p[20][2] < 50_000
-    assert 1 < p[50][2] < 50_000
+    # All bpcs must be > 1 and less than log2(vocab_size)
+    assert 1 < p[1][0] < 16
+    assert 1 < p[20][0] < 16
+    assert 1 < p[50][0] < 16
+    assert 1 < p[1][1] < 16
+    assert 1 < p[20][1] < 16
+    assert 1 < p[50][1] < 16
+    assert 1 < p[1][2] < 16
+    assert 1 < p[20][2] < 16
+    assert 1 < p[50][2] < 16
 
-    # Simple text much lower perplexity than harder text
-    assert p[1][0] * 2 < p[1][2]
-    assert p[20][0] * 2 < p[20][2]
-    assert p[50][0] * 2 < p[50][2]
+    # Simple text much lower bpc than harder text
+    assert p[1][0] + 0.2 < p[1][2]
+    assert p[20][0] + 0.2 < p[20][2]
+    assert p[50][0] + 0.2 < p[50][2]
 
-    # Perplexity decreases with warmup
+    # bpc decreases with prefill_len
     assert p[1][0] > p[20][0] > p[50][0]
     assert p[1][1] > p[20][1] > p[50][1]
     assert p[1][2] > p[20][2] > p[50][2]
 
-    # Longer text -> lower perplexity (across warmup values)
+    # Longer text -> lower bpc (across prefill_len values)
     assert p[1][0] < p[1][1]
     assert p[20][0] < p[20][1]
     assert p[50][0] < p[50][1]

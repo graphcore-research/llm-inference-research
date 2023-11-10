@@ -19,9 +19,9 @@ from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
 
 from . import (
     ann_attention,
+    bpc,
     eval_adapter,
     eviction_attention,
-    perplexity,
     qa,
     sparse_attention,
     summarisation,
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 
 
-TASKS = ["triviaqa", "squad", "cnn_dailymail", "wikitext_perplexity"]
+TASKS = ["triviaqa", "squad", "cnn_dailymail", "wikitext_bpc"]
 
 
 @dataclass
@@ -169,11 +169,11 @@ def _evaluate(
         data = summarisation.CnnDailymail.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = summarisation.evaluate
-    if task.name == "wikitext_perplexity":
+    if task.name == "wikitext_bpc":
         assert task.shots == 0
-        data = perplexity.WikiText.data()
+        data = bpc.WikiText.data()
         examples = [data[i] for i in range(task.samples)]
-        evaluate_fn = perplexity.evaluate
+        evaluate_fn = bpc.evaluate
 
     results = list(
         evaluate_fn(

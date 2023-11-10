@@ -20,6 +20,7 @@ from typing import (
 
 import lm_eval.base
 import torch
+import torch.nn.functional as F
 import transformers
 from torch import Tensor
 from torch.nn.functional import pad
@@ -441,23 +442,22 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         self,
         prefill: List[str],
         reference: List[str],
+        max_reference_tokens: int = 256,
         generation_context: Optional[ModelContext] = None,
     ) -> Tensor:
         """
-        Sample from the model using teacher-forcing.
+        Sample from the model using teacher-forcing, token-by-token.
 
-        Prefills are provided, which are initially fed to the model to generate the
-        first batch of normalised output logits. Rather than feeding these back
-        into the model, the reference texts are instead tokenized and fed in
-        for the next iteration.
-
-        For each batch of normalised output logits (i.e. log-probabilities), the values
-        corresponding to the next reference tokens are saved. This function returns
-        the concatenation of those normalised 'target' logits.
+        Prefills are provided, which are initially fed to the model to generate an
+        initial batch of negative log likelihoods. Rather than feeding the most likely
+        tokens back into the model, the reference texts are instead tokenized and fed in
+        for the next iteration. This function returns the concatenation of the negative
+        log likelihoods corresponding to the target tokens.
 
         Args:
             prefill (List[str]): List of prefill strings processed before generation
             reference (List[str]): List of reference strings for teacher-forcing
+            max_reference_tokens (int): Maximium number of generated reference tokens.
             generation_context (ModelContext, optional): A contextmanager function
             that accepts and yields a PreTrainedModel, used during generation only,
             for each batch being processed (for example to enable certain behaviours
@@ -465,7 +465,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             context in self.model.generation_context.
 
         Returns:
-            Tensor: Normlised target logits. Shape - (batch_size, num_generated_logits)
+            Tensor: negative log likelihoods. Shape - (batch_size, num_generated_logits)
         """
         with self.tokenizer_override(padding="left", truncation="left"):
             prefill_enc = self.tokenizer(
@@ -473,58 +473,54 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=self.max_length - 10,  # Generate at least 10 tokens
+                max_length=self.max_length - max_reference_tokens,
             )
-            warmup_ids = prefill_enc["input_ids"]
-            attention_mask = prefill_enc["attention_mask"]
+            prefill_length = prefill_enc["input_ids"].shape[-1]
         with self.tokenizer_override(padding="right", truncation="right"):
             reference_enc = self.tokenizer(
                 reference,
                 return_tensors="pt",
                 padding=True,
-                truncation=True,
-                max_length=self.max_length - warmup_ids.shape[-1],
+                truncation=False,
+                max_length=max_reference_tokens,
             )
-            all_target_ids = reference_enc["input_ids"]
+            reference_length = reference_enc["input_ids"].shape[-1]
+
+        full_input_ids = torch.concat(
+            [prefill_enc["input_ids"], reference_enc["input_ids"]], dim=1
+        )
+        full_attention_mask = torch.concat(
+            [prefill_enc["attention_mask"], reference_enc["attention_mask"]], dim=1
+        )
+        full_length = prefill_length + reference_length
 
         past_key_values = None
-        position_ids = None
 
         # Generate tokens one by one
-        out_logits = []
+        neg_log_likelihoods = []
         context = (
             generation_context
             or getattr(self.model, "generation_context", None)
             or null_model_context
         )
 
-        def get_input_ids() -> Iterator[Tensor]:
-            yield warmup_ids
-            yield from all_target_ids[:, :-1].split(1, dim=1)
-
-        def get_target_ids() -> Iterator[Tensor]:
-            yield from all_target_ids.split(1, dim=1)
-
         with torch.no_grad(), context(self.model) as model:
-            for input_ids, target_ids in zip(get_input_ids(), get_target_ids()):
+            idxs = [0] + list(range(prefill_length, full_length + 1))
+            for i, j, k in zip(idxs, idxs[1:], idxs[2:]):
+                input_ids = full_input_ids[:, i:j]
+                attention_mask = full_attention_mask[:, i:j]
+                target_ids = full_input_ids[:, j:k]
+
                 out = model(
                     input_ids=input_ids.to(model.device),
                     attention_mask=attention_mask.to(model.device),
                     past_key_values=past_key_values,
-                    position_ids=position_ids,
                 )
-
-                # Prepare inputs for next iteration
-                attention_mask = torch.cat([attention_mask, target_ids != 0], dim=1)
                 past_key_values = out.past_key_values
-                if position_ids is not None:
-                    position_ids = position_ids[:, -1:] + 1
 
                 logits = out.logits[:, -1, :]
-                target_logits = logits.gather(-1, target_ids)
-                normaliser = torch.logsumexp(logits, -1, keepdim=True)
-                normalised_target_logits = target_logits - normaliser
-                normalised_target_logits *= attention_mask[:, -1, None]
-                out_logits.append(normalised_target_logits)
+                nll = F.cross_entropy(logits, target_ids.squeeze(-1), reduction="none")
+                nll *= full_attention_mask[:, j:k].squeeze(-1)
+                neg_log_likelihoods.append(nll)
 
-        return torch.cat(out_logits, dim=1)
+        return torch.stack(neg_log_likelihoods, dim=1)

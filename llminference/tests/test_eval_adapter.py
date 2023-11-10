@@ -200,27 +200,27 @@ def test_forced_sample() -> None:
         "Compared to the preprocessed version of Penn Treebank (PTB)...",
     ]
     examples_a = {
-        warmup: {
-            "prefill": [t[:warmup] for t in _examples_a],
-            "reference": [t[warmup:] for t in _examples_a],
+        prefill_len: {
+            "prefill": [t[:prefill_len] for t in _examples_a],
+            "reference": [t[prefill_len:] for t in _examples_a],
         }
-        for warmup in [8, 15]
+        for prefill_len in [8, 15]
     }
     examples_b = {
-        warmup: {
-            "prefill": [t[:warmup] for t in _examples_b],
-            "reference": [t[warmup:] for t in _examples_b],
+        prefill_len: {
+            "prefill": [t[:prefill_len] for t in _examples_b],
+            "reference": [t[prefill_len:] for t in _examples_b],
         }
-        for warmup in [8, 15]
+        for prefill_len in [8, 15]
     }
 
     adapter = eval_adapter.Adapter.from_pretrained("EleutherAI/pythia-70m")
     adapter.model.double()
 
-    logits_a_8 = adapter.forced_sample(**examples_a[8])  # type: ignore[arg-type]
-    logits_b_8 = adapter.forced_sample(**examples_b[8])  # type: ignore[arg-type]
-    logits_a_15 = adapter.forced_sample(**examples_a[15])  # type: ignore[arg-type]
-    logits_b_15 = adapter.forced_sample(**examples_b[15])  # type: ignore[arg-type]
+    nll_a_8 = adapter.forced_sample(**examples_a[8])  # type: ignore[arg-type]
+    nll_b_8 = adapter.forced_sample(**examples_b[8])  # type: ignore[arg-type]
+    nll_a_15 = adapter.forced_sample(**examples_a[15])  # type: ignore[arg-type]
+    nll_b_15 = adapter.forced_sample(**examples_b[15])  # type: ignore[arg-type]
 
     len_a_8 = len(adapter.tok_encode(examples_a[8]["reference"][1]))
     len_b_8 = len(adapter.tok_encode(examples_b[8]["reference"][0]))
@@ -228,45 +228,40 @@ def test_forced_sample() -> None:
     len_b_15 = len(adapter.tok_encode(examples_b[15]["reference"][0]))
 
     # Check correct shapes
-    assert logits_a_8.shape == (2, len_a_8)
-    assert logits_b_8.shape == (2, len_b_8)
-    assert logits_a_15.shape == (2, len_a_15)
-    assert logits_b_15.shape == (2, len_b_15)
+    assert nll_a_8.shape == (2, len_a_8)
+    assert nll_b_8.shape == (2, len_b_8)
+    assert nll_a_15.shape == (2, len_a_15)
+    assert nll_b_15.shape == (2, len_b_15)
 
-    # Should be no nan or inf logits
-    assert not torch.isnan(logits_a_8).any()
-    assert not torch.isnan(logits_b_8).any()
-    assert not torch.isnan(logits_a_15).any()
-    assert not torch.isnan(logits_b_15).any()
-    assert not torch.isinf(logits_a_8).any()
-    assert not torch.isinf(logits_b_8).any()
-    assert not torch.isinf(logits_a_15).any()
-    assert not torch.isinf(logits_b_15).any()
+    assert ((0 <= nll_a_8) & (nll_a_8 <= 1000)).all()
+    assert ((0 <= nll_b_8) & (nll_b_8 <= 1000)).all()
+    assert ((0 <= nll_a_15) & (nll_a_15 <= 1000)).all()
+    assert ((0 <= nll_b_15) & (nll_b_15 <= 1000)).all()
 
     # Padding should align with length of sequence
     expected_padding_len = len_a_15 - len_b_15
-    no_padding_logits = logits_a_15[0, :-expected_padding_len]
-    all_padding_logits = logits_a_15[0, -expected_padding_len:]
-    assert (all_padding_logits == 0).all()
-    assert (no_padding_logits != 0).all()
+    no_padding_nll = nll_a_15[0, :-expected_padding_len]
+    all_padding_nll = nll_a_15[0, -expected_padding_len:]
+    assert (all_padding_nll == 0).all()
+    assert (no_padding_nll != 0).all()
 
-    # Check same inputs have same logits, regardless of padding
-    assert (no_padding_logits == logits_b_15[0]).all()
+    # Check same inputs have same nll, regardless of padding
+    assert (no_padding_nll == nll_b_15[0]).all()
 
-    # Check logits are the same post-warmup for different warmup lengths
+    # Check nll are the same post-prefill for different prefill lengths
     # (note: this only works because 8 & 15 align with token boundaries, but it's
-    # a useful sanity check in the case where the warmup-break doesn't affect
+    # a useful sanity check in the case where the prefill-break doesn't affect
     # tokenization)
     a_8_ctx_ids = adapter.tok_encode(examples_a[8]["prefill"][1])
     a_8_gen_ids = adapter.tok_encode(examples_a[8]["reference"][1])
     a_15_ctx_ids = adapter.tok_encode(examples_a[15]["prefill"][1])
     a_15_gen_ids = adapter.tok_encode(examples_a[15]["reference"][1])
-    warmup_diff_len = len(a_15_ctx_ids) - len(a_8_ctx_ids)
+    prefill_diff_len = len(a_15_ctx_ids) - len(a_8_ctx_ids)
 
     # Check tokenization is the same, despite splitting text at different points
     assert a_8_ctx_ids + a_8_gen_ids == a_15_ctx_ids + a_15_gen_ids
-    # Given tokenization is the same, check post-warmup logits come out the same
-    torch.testing.assert_close(logits_a_8[1, warmup_diff_len:], logits_a_15[1, :])
+    # Given tokenization is the same, check post-prefill nll come out the same
+    torch.testing.assert_close(nll_a_8[1, prefill_diff_len:], nll_a_15[1, :])
 
 
 def test_forced_sample_generation_context() -> None:
@@ -303,7 +298,7 @@ def test_forced_sample_generation_context() -> None:
 
     no_context = adapter.forced_sample(**text)  # type: ignore[arg-type]
     pruning_context = adapter.forced_sample(
-        **text, generation_context=prune_model_context
+        text["prefill"], text["reference"], generation_context=prune_model_context
     )
 
     ratio = no_context / pruning_context
