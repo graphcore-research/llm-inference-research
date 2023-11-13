@@ -477,14 +477,13 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             )
             prefill_length = prefill_enc["input_ids"].shape[-1]
         with self.tokenizer_override(padding="right", truncation="right"):
-            reference_enc = self.tokenizer(
-                reference,
-                return_tensors="pt",
-                padding=True,
-                truncation=False,
-                max_length=max_reference_tokens,
-            )
+            reference_enc = self.tokenizer(reference, return_tensors="pt", padding=True)
             reference_length = reference_enc["input_ids"].shape[-1]
+            if reference_length > max_reference_tokens:
+                raise ValueError(
+                    "Reference string exceeds max_reference_tokens"
+                    f"={max_reference_tokens}, reference: {reference}"
+                )
 
         full_input_ids = torch.concat(
             [prefill_enc["input_ids"], reference_enc["input_ids"]], dim=1

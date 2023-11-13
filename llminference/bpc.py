@@ -131,6 +131,7 @@ def evaluate(
             prefill,
             reference,
             generation_context=generation_context,
+            max_reference_tokens=max_reference_tokens,
         )
         bpcs = calc_bpc(nll_batch, reference_char_lengths)
         for p, pr_len, g_len in zip(bpcs, prefill_lengths, reference_lengths):
