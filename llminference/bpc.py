@@ -32,13 +32,14 @@ from .utility import AnyDict
 
 
 class WikiText:
-    """Filtered version of wikitext-2-v1 (training set) from HuggingFace"""
+    """Filtered version of wikitext-103-v1 (training set) from HuggingFace
+    EleutherAI/wikitext_document_level"""
 
     @staticmethod
     def preprocess(
         d: Dict[str, Any], prefill_len: int, reference_len: int
     ) -> Optional[Dict[str, Any]]:
-        """Generate a summarisation example from wikitext-2-v1.
+        """Generate a summarisation example from wikitext-103-v1.
 
         Examples will be split into "prefill" and "reference" sub-strings, where the
         prefill ends just before the first whitespace character occurring after
