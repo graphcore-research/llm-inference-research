@@ -130,7 +130,7 @@ def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
     return t.gather(dim, i.expand(*t.shape[:dim], i.shape[dim], *t.shape[dim + 1 :]))
 
 
-class ANN(nn.Module):
+class AnnAttention(nn.Module):
     """Generic ANN with local windowing and masking."""
 
     def __init__(self, settings: Settings, n_heads: int, head_size: int):
@@ -144,7 +144,7 @@ class ANN(nn.Module):
         else:
             raise ValueError(f"Unexpected settings.score = {settings.score}")
         # Set to an empty list to turn on ANN index logging
-        self.log_indices: Optional[List[Tensor]] = None
+        self.debug_indices: Optional[List[Tensor]] = None
 
     def _attention(
         self,
@@ -213,8 +213,8 @@ class ANN(nn.Module):
         )
         # Find max-score keys
         indices = topk_score.topk(min(self.settings.k, score.shape[-1]), -1).indices
-        if self.log_indices is not None:
-            self.log_indices.append(indices)
+        if self.debug_indices is not None:
+            self.debug_indices.append(indices)
 
         # Optional "mean_value" kv
         value_mask = logmask.squeeze(-2).unsqueeze(-1).exp()
@@ -242,7 +242,7 @@ class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
     def __init__(self, config: GPTNeoXConfig, settings: Settings):
         utility.check_transformers_version(type(self))
         super().__init__(config)
-        self.ann = ANN(settings, self.num_attention_heads, self.head_size)
+        self.ann = AnnAttention(settings, self.num_attention_heads, self.head_size)
 
     def _attn(
         self,
@@ -274,7 +274,7 @@ class LlamaAttentionWithANN(llama_attention.LlamaAttention):
         utility.check_transformers_version(type(self))
         super().__init__(config)
         self.settings = settings
-        self.ann = ANN(settings, self.num_heads, self.head_dim)
+        self.ann = AnnAttention(settings, self.num_heads, self.head_dim)
 
     def _attn(
         self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor

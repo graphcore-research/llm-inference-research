@@ -38,7 +38,7 @@ def test_ann_module() -> None:
         (ann.LowRank.Settings(8), False),
         (ann.SparseQ.Settings(6), True),
     ]:
-        module = ann.ANN(
+        module = ann.AnnAttention(
             ann.Settings(
                 k=4,
                 local_k=1,
@@ -114,7 +114,7 @@ def test_convert_gptneox() -> None:
         ),
     )
     for layer in ann_model.gpt_neox.layers:
-        layer.attention.ann.log_indices = []
+        layer.attention.ann.debug_indices = []
 
     # Run a simple test case
     converted = eval_adapter.Adapter(ann_model, adapter.tokenizer, adapter.batch_size)
@@ -130,6 +130,6 @@ def test_convert_gptneox() -> None:
 
     # Check that the masks all match the expected k
     for layer in ann_model.gpt_neox.layers:
-        assert layer.attention.ann.log_indices
-        for indices in layer.attention.ann.log_indices:
+        assert layer.attention.ann.debug_indices
+        for indices in layer.attention.ann.debug_indices:
             assert indices.shape[-1] == 8

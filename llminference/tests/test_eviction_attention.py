@@ -98,7 +98,7 @@ def test_convert_gptneox() -> None:
         ea.convert(adapter.model, settings), adapter.tokenizer, adapter.batch_size
     )
     for layer in eviction_adapter.model.gpt_neox.layers:
-        layer.attention.eviction.log_masks = []
+        layer.attention.eviction.debug_masks = []
 
     context = " predict parrot" * 10 + " noise" * 10
     prompt = " predict"
@@ -121,8 +121,8 @@ def test_convert_gptneox() -> None:
     # Check the masks don't exceed `k+1`
     # Note: +1 for the current query's (key, value)
     for layer in eviction_adapter.model.gpt_neox.layers:
-        assert layer.attention.eviction.log_masks
-        for mask in layer.attention.eviction.log_masks:
+        assert layer.attention.eviction.debug_masks
+        for mask in layer.attention.eviction.debug_masks:
             assert (mask.sum(-1) == settings.k + 1).all()
 
     # This is a slightly risky (possibly unstable) test

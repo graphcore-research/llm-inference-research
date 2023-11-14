@@ -139,7 +139,7 @@ class Eviction:
         self.enabled = False
         self.eviction_mask: Optional[EvictionMask] = None
         # Set to an empty list to turn on eviction mask logging
-        self.log_masks: Optional[List[Tensor]] = None
+        self.debug_masks: Optional[List[Tensor]] = None
 
     def enable(self, enabled: bool) -> None:
         self.enabled = enabled
@@ -150,8 +150,8 @@ class Eviction:
         if not self.enabled or self.eviction_mask is None:
             return attention_mask
         eviction_mask = self.eviction_mask.mask[..., None, : attention_mask.shape[-1]]
-        if self.log_masks is not None:
-            self.log_masks.append(eviction_mask.clone())
+        if self.debug_masks is not None:
+            self.debug_masks.append(eviction_mask.clone())
         # Apply the mask to remove previously evicted values
         return attention_mask + torch.finfo(attention_mask.dtype).min * ~eviction_mask
 
