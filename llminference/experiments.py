@@ -188,7 +188,7 @@ def _evaluate(
         count=len(results),
         **{
             k: sum(x[k] for x in results) / len(results)
-            for k in ["prefill_length", "reference_length", "match", "rougeL"]
+            for k in ["prefill_length", "reference_length", "match", "rougeL", "bpc"]
             if k in results[0]
         },
     )
