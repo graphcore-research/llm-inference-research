@@ -263,6 +263,19 @@ def test_forced_sample() -> None:
     # Given tokenization is the same, check post-prefill nll come out the same
     torch.testing.assert_close(nll_a_8[1, prefill_diff_len:], nll_a_15[1, :])
 
+    # Check we recover the same NLL from unbatched calls
+    for example, expected_batch in [
+        (examples_a[8], nll_a_8),
+        (examples_b[8], nll_b_8),
+        (examples_a[15], nll_a_15),
+        (examples_b[15], nll_b_15),
+    ]:
+        for prefill, reference, expected in zip(
+            example["prefill"], example["reference"], expected_batch
+        ):
+            nll = adapter.forced_sample(prefill=[prefill], reference=[reference])
+            torch.testing.assert_close(nll[0], expected[: nll.shape[1]])
+
 
 def test_forced_sample_generation_context() -> None:
     _text = [

@@ -491,9 +491,10 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         full_attention_mask = torch.concat(
             [prefill_enc["attention_mask"], reference_enc["attention_mask"]], dim=1
         )
+        full_position_ids = torch.nn.functional.pad(
+            full_attention_mask.cumsum(dim=1)[:, :-1], (1, 0)
+        )
         full_length = prefill_length + reference_length
-
-        past_key_values = None
 
         # Generate tokens one by one
         neg_log_likelihoods = []
@@ -503,15 +504,18 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
             or null_model_context
         )
 
+        past_key_values = None
         with torch.no_grad(), context(self.model) as model:
             idxs = [0] + list(range(prefill_length, full_length + 1))
             for i, j, k in zip(idxs, idxs[1:], idxs[2:]):
                 input_ids = full_input_ids[:, i:j]
-                attention_mask = full_attention_mask[:, i:j]
+                position_ids = full_position_ids[:, i:j]
+                attention_mask = full_attention_mask[:, :j]
                 target_ids = full_input_ids[:, j:k]
 
                 out = model(
                     input_ids=input_ids.to(model.device),
+                    position_ids=position_ids.to(model.device),
                     attention_mask=attention_mask.to(model.device),
                     past_key_values=past_key_values,
                 )
@@ -519,7 +523,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
 
                 logits = out.logits[:, -1, :]
                 nll = F.cross_entropy(logits, target_ids.squeeze(-1), reduction="none")
-                nll *= full_attention_mask[:, j:k].squeeze(-1)
+                nll.masked_fill_(1 - full_attention_mask[:, j:k].squeeze(-1), 0)
                 neg_log_likelihoods.append(nll)
 
         return torch.stack(neg_log_likelihoods, dim=1)
