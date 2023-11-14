@@ -214,7 +214,9 @@ class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
 
 
 @contextmanager
-def generation_context(model: GPTNeoXForCausalLM) -> Iterator[GPTNeoXForCausalLM]:
+def generation_context(
+    model: Union[GPTNeoXForCausalLM, LlamaForCausalLM]
+) -> Iterator[Union[GPTNeoXForCausalLM, LlamaForCausalLM]]:
     """(Context manager) enable KV eviction during this scope."""
     attns = [
         m
