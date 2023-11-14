@@ -40,7 +40,7 @@ def test_ann_module() -> None:
     ]:
         module = ann.AnnAttention(
             ann.Settings(
-                k=4,
+                k=3,
                 local_k=1,
                 reallocate_to_mean_value=reallocate_to_mean_value,
                 score=cast(ann.ScoreSettings, score),
@@ -77,7 +77,7 @@ def test_gptneox_with_ann() -> None:
     )
     assert output.shape == (13, 1, 128)
     assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
-    assert ((weights != 0).sum(-1) == 8).all(), "sparse attention"
+    assert ((weights != 0).sum(-1) == 9).all(), "sparse attention"
 
 
 def test_llama_with_ann() -> None:
@@ -96,7 +96,7 @@ def test_llama_with_ann() -> None:
     )
     assert output.shape == (13, 1, 128)
     assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
-    assert ((weights != 0).sum(-1) == 8).all(), "sparse attention"
+    assert ((weights != 0).sum(-1) == 9).all(), "sparse attention"
 
 
 def test_convert_gptneox() -> None:
@@ -132,4 +132,4 @@ def test_convert_gptneox() -> None:
     for layer in ann_model.gpt_neox.layers:
         assert layer.attention.ann.debug_indices
         for indices in layer.attention.ann.debug_indices:
-            assert indices.shape[-1] == 8
+            assert indices.shape[-1] == 9

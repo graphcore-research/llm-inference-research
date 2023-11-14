@@ -205,14 +205,14 @@ class AnnAttention(nn.Module):
         # Calculate an approximate score for each (query, key) pair
         score = (self.score(query, key) + logmask).float()
 
-        # Set the score of local keys to max
+        # Set the score of local keys (+1 current) to max
         causal_index = sparse_attention.causal_index(logmask[:, :, -1, :])
-        is_local = (0 <= causal_index) & (causal_index < self.settings.local_k)
+        is_local = (0 <= causal_index) & (causal_index < self.settings.local_k + 1)
         topk_score = score.masked_fill(
             is_local[:, :, None, :], torch.finfo(score.dtype).max
         )
-        # Find max-score keys
-        indices = topk_score.topk(min(self.settings.k, score.shape[-1]), -1).indices
+        # Find max-score keys (note: +1 because the current token's k comes "for free")
+        indices = topk_score.topk(min(self.settings.k + 1, score.shape[-1]), -1).indices
         if self.debug_indices is not None:
             self.debug_indices.append(indices)
 
