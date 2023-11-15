@@ -20,6 +20,7 @@ from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
 from . import (
     ann_attention,
+    bpc,
     eval_adapter,
     eviction_attention,
     pipelined_models,
@@ -42,7 +43,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 
 
-TASKS = ["triviaqa", "squad", "cnn_dailymail"]
+TASKS = ["triviaqa", "squad", "cnn_dailymail", "wikitext_bpc"]
 
 
 @dataclass
@@ -173,6 +174,11 @@ def _evaluate(
         data = summarisation.CnnDailymail.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = summarisation.evaluate
+    if task.name == "wikitext_bpc":
+        assert task.shots == 0
+        data = bpc.WikiText.data()
+        examples = [data[i] for i in range(task.samples)]
+        evaluate_fn = bpc.evaluate
 
     results = list(
         evaluate_fn(
@@ -187,7 +193,7 @@ def _evaluate(
         count=len(results),
         **{
             k: sum(x[k] for x in results) / len(results)
-            for k in ["prefill_length", "reference_length", "match", "rougeL"]
+            for k in ["prefill_length", "reference_length", "match", "rougeL", "bpc"]
             if k in results[0]
         },
     )

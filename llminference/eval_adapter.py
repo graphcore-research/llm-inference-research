@@ -20,6 +20,7 @@ from typing import (
 
 import lm_eval.base
 import torch
+import torch.nn.functional as F
 import transformers
 from torch import Tensor
 from torch.nn.functional import pad
@@ -436,3 +437,93 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                     position_ids = position_ids[:, -1:] + 1
 
         return torch.cat(generated_tokens, dim=1)
+
+    def forced_sample(
+        self,
+        prefill: List[str],
+        reference: List[str],
+        max_reference_tokens: int = 256,
+        generation_context: Optional[ModelContext] = None,
+    ) -> Tensor:
+        """
+        Sample from the model using teacher-forcing, token-by-token.
+
+        Prefills are provided, which are initially fed to the model to generate an
+        initial batch of negative log likelihoods. Rather than feeding the most likely
+        tokens back into the model, the reference texts are instead tokenized and fed in
+        for the next iteration. This function returns the concatenation of the negative
+        log likelihoods corresponding to the target tokens.
+
+        Args:
+            prefill (List[str]): List of prefill strings processed before generation
+            reference (List[str]): List of reference strings for teacher-forcing
+            max_reference_tokens (int): Maximium number of generated reference tokens.
+            generation_context (ModelContext, optional): A contextmanager function
+            that accepts and yields a PreTrainedModel, used during generation only,
+            for each batch being processed (for example to enable certain behaviours
+            or reset state between batches). If not specified, looks for a generation
+            context in self.model.generation_context.
+
+        Returns:
+            Tensor: negative log likelihoods. Shape - (batch_size, num_generated_logits)
+        """
+        with self.tokenizer_override(padding="left", truncation="left"):
+            prefill_enc = self.tokenizer(
+                prefill,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.max_length - max_reference_tokens,
+            )
+            prefill_length = prefill_enc["input_ids"].shape[-1]
+        with self.tokenizer_override(padding="right", truncation="right"):
+            reference_enc = self.tokenizer(reference, return_tensors="pt", padding=True)
+            reference_length = reference_enc["input_ids"].shape[-1]
+            if reference_length > max_reference_tokens:
+                raise ValueError(
+                    "Reference string exceeds max_reference_tokens"
+                    f"={max_reference_tokens}, reference: {reference}"
+                )
+
+        full_input_ids = torch.concat(
+            [prefill_enc["input_ids"], reference_enc["input_ids"]], dim=1
+        )
+        full_attention_mask = torch.concat(
+            [prefill_enc["attention_mask"], reference_enc["attention_mask"]], dim=1
+        )
+        full_position_ids = torch.nn.functional.pad(
+            full_attention_mask.cumsum(dim=1)[:, :-1], (1, 0)
+        )
+        full_length = prefill_length + reference_length
+
+        # Generate tokens one by one
+        neg_log_likelihoods = []
+        context = (
+            generation_context
+            or getattr(self.model, "generation_context", None)
+            or null_model_context
+        )
+
+        past_key_values = None
+        with torch.no_grad(), context(self.model) as model:
+            idxs = [0] + list(range(prefill_length, full_length + 1))
+            for i, j, k in zip(idxs, idxs[1:], idxs[2:]):
+                input_ids = full_input_ids[:, i:j]
+                position_ids = full_position_ids[:, i:j]
+                attention_mask = full_attention_mask[:, :j]
+                target_ids = full_input_ids[:, j:k]
+
+                out = model(
+                    input_ids=input_ids.to(model.device),
+                    position_ids=position_ids.to(model.device),
+                    attention_mask=attention_mask.to(model.device),
+                    past_key_values=past_key_values,
+                )
+                past_key_values = out.past_key_values
+
+                logits = out.logits[:, -1, :]
+                nll = F.cross_entropy(logits, target_ids.squeeze(-1), reduction="none")
+                nll.masked_fill_(1 - full_attention_mask[:, j:k].squeeze(-1), 0)
+                neg_log_likelihoods.append(nll)
+
+        return torch.stack(neg_log_likelihoods, dim=1)
