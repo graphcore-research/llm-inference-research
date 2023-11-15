@@ -33,7 +33,7 @@ from . import (
 # A dictionary of code changes that may affect the numbers, which is always
 # logged alongside experiment results.
 # E.g. {"evaluate-regex-permissive-newlines": True}
-CODE_CHANGES: Dict[str, Any] = dict()
+CODE_CHANGES: Dict[str, Any] = {"ann-local-token-for-free": True}
 
 WANDB_PROJECT = "sparse-attention"
 WANDB_URL = "https://wandb.sourcevertex.net"
@@ -137,27 +137,15 @@ class SparsityMethods:
 
     @staticmethod
     def eviction(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, GPTNeoXForCausalLM)
-        return eviction_attention.convert_gptneox(
-            model, eviction_attention.Settings(**settings)
-        )
-
-    @staticmethod
-    def eviction_llama(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, LlamaForCausalLM)
-        return eviction_attention.convert_llama(
+        assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
+        return eviction_attention.convert(
             model, eviction_attention.Settings(**settings)
         )
 
     @staticmethod
     def ann(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, GPTNeoXForCausalLM)
-        return ann_attention.convert_gptneox(model, ann_attention.Settings(**settings))
-
-    @staticmethod
-    def ann_llama(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, LlamaForCausalLM)
-        return ann_attention.convert_llama(model, ann_attention.Settings(**settings))
+        assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
+        return ann_attention.convert(model, ann_attention.Settings(**settings))
 
 
 # Running

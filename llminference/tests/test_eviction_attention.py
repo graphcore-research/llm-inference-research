@@ -1,6 +1,8 @@
 import pytest
 import torch
 from torch import tensor
+from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
+from transformers.models.llama.configuration_llama import LlamaConfig
 
 from .. import eval_adapter
 from .. import eviction_attention as ea
@@ -8,7 +10,7 @@ from .. import eviction_attention as ea
 
 @pytest.mark.parametrize("strategy", ["sum_weight", "lru"])
 def test_eviction_strategy(strategy: str) -> None:
-    eviction = ea.Eviction(
+    eviction = ea.EvictionMask(
         ea.Settings(k=3, local_k=2, strategy=strategy),
         (1, 1, 10),
         device=torch.device("cpu"),
@@ -33,16 +35,70 @@ def test_eviction_strategy(strategy: str) -> None:
     assert torch.equal(eviction.mask[0, 0, :6].long(), tensor([0, 1, 0, 1, 1, 0]))
 
 
+def test_gptneox_with_eviction() -> None:
+    module = ea.GPTNeoXAttentionWithEviction(
+        GPTNeoXConfig(hidden_size=128, num_attention_heads=4),
+        ea.Settings(k=8, local_k=2, strategy="sum_weight"),
+    )
+    # Prefill
+    _, layer_past, _ = module(
+        torch.randn(13, 19, 128),
+        attention_mask=torch.zeros(13, 1, 19, 19),
+        position_ids=torch.arange(19)[None],
+        use_cache=True,
+        output_attentions=True,
+    )
+    # Generation (with eviction)
+    module.eviction.enable(True)
+    output, _, weights = module(
+        torch.randn(13, 1, 128),
+        attention_mask=torch.zeros(13, 1, 1, 20),
+        position_ids=torch.tensor([19])[None],
+        layer_past=layer_past,
+        use_cache=True,
+        output_attentions=True,
+    )
+    assert output.shape == (13, 1, 128)
+    assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
+    assert ((weights != 0).sum(-1) == 8 + 1).all(), "sparse attention"
+
+
+def test_llama_with_eviction() -> None:
+    module = ea.LlamaAttentionWithEviction(
+        LlamaConfig(hidden_size=128, num_attention_heads=4, num_key_value_heads=4),
+        ea.Settings(k=8, local_k=2, strategy="lru"),
+    )
+    # Prefill
+    _, _, past_key_value = module(
+        torch.randn(13, 19, 128),
+        attention_mask=torch.zeros(13, 1, 19, 19),
+        position_ids=torch.arange(19)[None],
+        use_cache=True,
+        output_attentions=True,
+    )
+    # Generation (with eviction)
+    module.eviction.enable(True)
+    output, weights, _ = module(
+        torch.randn(13, 1, 128),
+        attention_mask=torch.zeros(13, 1, 1, 20),
+        position_ids=torch.tensor([19])[None],
+        past_key_value=past_key_value,
+        use_cache=True,
+        output_attentions=True,
+    )
+    assert output.shape == (13, 1, 128)
+    assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
+    assert ((weights != 0).sum(-1) == 8 + 1).all(), "sparse attention"
+
+
 def test_convert_gptneox() -> None:
     settings = ea.Settings(k=16, local_k=8, strategy="lru")
     adapter = eval_adapter.Adapter.from_pretrained("EleutherAI/pythia-160m")
     eviction_adapter = eval_adapter.Adapter(
-        ea.convert_gptneox(adapter.model, settings),
-        adapter.tokenizer,
-        adapter.batch_size,
+        ea.convert(adapter.model, settings), adapter.tokenizer, adapter.batch_size
     )
     for layer in eviction_adapter.model.gpt_neox.layers:
-        layer.attention.eviction_masks = []
+        layer.attention.eviction.debug_masks = []
 
     context = " predict parrot" * 10 + " noise" * 10
     prompt = " predict"
@@ -65,8 +121,8 @@ def test_convert_gptneox() -> None:
     # Check the masks don't exceed `k+1`
     # Note: +1 for the current query's (key, value)
     for layer in eviction_adapter.model.gpt_neox.layers:
-        assert layer.attention.eviction_masks
-        for mask in layer.attention.eviction_masks:
+        assert layer.attention.eviction.debug_masks
+        for mask in layer.attention.eviction.debug_masks:
             assert (mask.sum(-1) == settings.k + 1).all()
 
     # This is a slightly risky (possibly unstable) test

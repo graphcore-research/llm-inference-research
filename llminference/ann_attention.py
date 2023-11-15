@@ -1,11 +1,9 @@
 """Approximate nearest neighbour methods that approximate `Q @ K.T`."""
-import copy
-import math
+
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union, cast
 
 import torch
-import torch.nn.functional as F
 from torch import Tensor, nn
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.gpt_neox.modeling_gpt_neox import (
@@ -13,14 +11,9 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
     GPTNeoXForCausalLM,
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
-from transformers.models.llama.modeling_llama import (
-    LlamaAttention,
-    LlamaForCausalLM,
-    apply_rotary_pos_emb,
-    repeat_kv,
-)
+from transformers.models.llama.modeling_llama import LlamaAttention, LlamaForCausalLM
 
-from . import sparse_attention
+from . import llama_attention, sparse_attention, utility
 
 
 class LowRank(nn.Module):
@@ -47,10 +40,10 @@ class LowRank(nn.Module):
 
         returns -- (batch, n_heads, query, key)
         """
+        head_size = query.shape[-1]
         query_proj = query.to(self.weight.dtype) @ self.weight
         key_proj = key.to(self.weight.dtype) @ self.weight
-        score: Tensor = query_proj @ key_proj.transpose(-1, -2)
-        return score
+        return cast(Tensor, query_proj @ key_proj.transpose(-1, -2) * head_size**-0.5)
 
 
 class SparseQ(nn.Module):
@@ -75,12 +68,26 @@ class SparseQ(nn.Module):
         returns -- (batch, n_heads, 1, key)
         """
         assert query.shape[-2] == 1, "no support for multiple queries"
-        components = query.abs().topk(dim=-1, k=self.settings.rank).indices
-        query_proj = query.gather(-1, components)
+        head_size = query.shape[-1]
+        topk = query.abs().topk(dim=-1, k=self.settings.rank)
+        query_proj = query.gather(-1, topk.indices)
         key_proj = key.gather(
-            -1, components.expand(key.shape[:-1] + (self.settings.rank,))
+            -1, topk.indices.expand(key.shape[:-1] + (self.settings.rank,))
         )
-        return query_proj @ key_proj.transpose(-1, -2)
+        # Scale could be:
+        #  - sqrt(head_size) -- if we think our approximation is exact
+        #  - sqrt(rank)      -- if our approximation is no better than random
+        #  - sqrt(q_coverage * head_size) -- used below
+        #       q_coverage estimates the variance of Q K^T from the approximated
+        #       product, and the L1 coverage of Q by the topk components
+        scale = (
+            topk.values.sum(-1)
+            .div_(query.abs().sum(-1))
+            .mul_(head_size)
+            .pow_(0.5)
+            .unsqueeze(-1)
+        )
+        return (query_proj @ key_proj.transpose(-1, -2)).div_(scale)
 
 
 ScoreSettings = Union[LowRank.Settings, SparseQ.Settings]
@@ -90,10 +97,16 @@ ScoreSettings = Union[LowRank.Settings, SparseQ.Settings]
 class Settings:
     k: int
     local_k: int
+    reallocate_to_mean_value: bool
     score: ScoreSettings
 
     def __init__(
-        self, k: int, local_k: int, score: Union[ScoreSettings, str], **args: Any
+        self,
+        k: int,
+        local_k: int,
+        reallocate_to_mean_value: bool,
+        score: Union[ScoreSettings, str],
+        **args: Any,
     ):
         if isinstance(score, str):
             ctor: Any = dict(low_rank=LowRank.Settings, sparse_q=SparseQ.Settings)[
@@ -107,10 +120,17 @@ class Settings:
             score_settings = score
         self.k = k
         self.local_k = local_k
+        self.reallocate_to_mean_value = reallocate_to_mean_value
         self.score = score_settings
 
 
-class ANN(nn.Module):
+def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
+    """A broadcasting version of torch.gather."""
+    dim += (dim < 0) * t.ndim
+    return t.gather(dim, i.expand(*t.shape[:dim], i.shape[dim], *t.shape[dim + 1 :]))
+
+
+class AnnAttention(nn.Module):
     """Generic ANN with local windowing and masking."""
 
     def __init__(self, settings: Settings, n_heads: int, head_size: int):
@@ -123,36 +143,106 @@ class ANN(nn.Module):
             self.score = SparseQ(settings.score)
         else:
             raise ValueError(f"Unexpected settings.score = {settings.score}")
+        # Set to an empty list to turn on ANN index logging
+        self.debug_indices: Optional[List[Tensor]] = None
 
-    def forward(self, query: Tensor, key: Tensor, logmask: Tensor) -> Tensor:
-        """Compute an attention mask for ANN attention.
+    def _attention(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        logmask: Tensor,
+        kv_weight: Tensor,
+        mean_value: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        """Dense attention, with left-over weight reallocation.
+
+        query -- (batch, n_heads, n_query, head_size)
+
+        key -- (batch, n_heads, n_kv, head_size)
+
+        value -- (batch, n_heads, n_kv, head_size)
+
+        logmask -- (batch, n_heads, n_query, n_kv)
+
+        kv_weight -- (batch, n_heads, n_query) | ()
+                  -- 1.0 for regular attention (no reallocation)
+
+        mean_value -- (batch, n_heads, n_query, head_size)
+        """
+        scores = (
+            (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask)
+        )
+        weights = torch.softmax(scores, -1, dtype=torch.float32).to(value.dtype)
+        # Value-mixing with reallocation
+        weights *= kv_weight[..., None]
+        output = weights @ value
+        output += (1 - kv_weight[..., None]) * mean_value
+        return output, weights
+
+    def forward(
+        self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        """Preprocess (key, value, mask) for ANN attention.
 
         query -- (batch, n_heads, 1, head_size)
 
-        key -- (batch, n_heads, key, head_size)
+        key -- (batch, n_heads, seq, head_size)
 
-        logmask -- (batch, n_heads, 1, key)
+        value -- (batch, n_heads, seq, head_size)
 
-        returns -- bool(batch, n_heads, 1, key) -- true for unmasked
+        logmask -- (batch, n_heads, 1, seq)
+
+        returns -- (output, weights)
+                   output -- (batch, n_heads, 1, head_size)
+                   weights -- (batch, n_heads, 1, seq)
         """
+        batch, n_heads, seq, head_size = key.shape
+        assert query.shape == (batch, n_heads, 1, head_size)
+        assert value.shape == (batch, n_heads, seq, head_size)
+        assert logmask.shape == (batch, n_heads, 1, seq)
+
         # Calculate an approximate score for each (query, key) pair
-        score = self.score(query, key) + logmask
-        # Set the score of local keys to max
+        score = (self.score(query, key) + logmask).float()
+
+        # Set the score of local keys (+1 current) to max
         causal_index = sparse_attention.causal_index(logmask[:, :, -1, :])
-        is_local = (0 <= causal_index) & (causal_index < self.settings.local_k)
-        score.masked_fill_(is_local[:, :, None, :], torch.finfo(score.dtype).max)
-        # Mask to select max-score keys
-        return sparse_attention.topk_mask(
-            score, k=self.settings.k
-        ) & sparse_attention.score_to_mask(logmask)
+        is_local = (0 <= causal_index) & (causal_index < self.settings.local_k + 1)
+        topk_score = score.masked_fill(
+            is_local[:, :, None, :], torch.finfo(score.dtype).max
+        )
+        # Find max-score keys (note: +1 because the current token's k comes "for free")
+        indices = topk_score.topk(min(self.settings.k + 1, score.shape[-1]), -1).indices
+        if self.debug_indices is not None:
+            self.debug_indices.append(indices)
+
+        # Optional "mean_value" kv
+        value_mask = logmask.squeeze(-2).unsqueeze(-1).exp()
+        mean_value = ((value * value_mask).sum(-2) / value_mask.sum(-2)).unsqueeze(-2)
+        kv_weight = torch.tensor(1.0)
+        if self.settings.reallocate_to_mean_value:
+            kv_weight = (
+                gather(torch.softmax(score, -1), -1, indices).sum(-1).to(value.dtype)
+            )
+
+        # Slice key, value, logmask for attention
+        kv_indices = indices.squeeze(-2).unsqueeze(-1)
+        output, weights = self._attention(
+            query,
+            gather(key, -2, kv_indices),
+            gather(value, -2, kv_indices),
+            gather(logmask, -1, indices),
+            kv_weight=kv_weight,
+            mean_value=mean_value,
+        )
+        return output, torch.zeros_like(logmask).scatter(-1, indices, weights)
 
 
 class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
     def __init__(self, config: GPTNeoXConfig, settings: Settings):
+        utility.check_transformers_version(type(self))
         super().__init__(config)
-        self.ann = ANN(settings, self.num_attention_heads, self.head_size)
-        # Set to an empty list to turn on ANN mask logging
-        self.ann_masks: Optional[List[Tensor]] = None
+        self.ann = AnnAttention(settings, self.num_attention_heads, self.head_size)
 
     def _attn(
         self,
@@ -163,194 +253,48 @@ class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
         head_mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         assert attention_mask is not None
+        assert head_mask is None
 
         # Only enable ANN during autoregressive generation
         if query.shape[-2] == 1:
-            ann_mask = self.ann(query, key, attention_mask)
-            if self.ann_masks is not None:
-                self.ann_masks.append(ann_mask)
-            attention_mask = torch.finfo(attention_mask.dtype).min * ~ann_mask
+            return self.ann(  # type:ignore[no-any-return]
+                query,
+                key,
+                value,
+                attention_mask.broadcast_to(key.unsqueeze(-3).shape[:-1]),
+            )
 
         return super()._attn(  # type:ignore[no-any-return]
             query, key, value, attention_mask, head_mask
         )
 
 
-class LlamaAttentionWithANN(LlamaAttention):
+class LlamaAttentionWithANN(llama_attention.LlamaAttention):
     def __init__(self, config: LlamaConfig, settings: Settings):
+        utility.check_transformers_version(type(self))
         super().__init__(config)
-        self.ann = ANN(settings, self.num_heads, self.head_dim)
-        # Set to an empty list to turn on ANN mask logging
-        self.ann_masks: Optional[List[Tensor]] = None
+        self.settings = settings
+        self.ann = AnnAttention(settings, self.num_heads, self.head_dim)
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-        padding_mask: Optional[torch.LongTensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
-        bsz, q_len, _ = hidden_states.size()
-
-        if self.config.pretraining_tp > 1:
-            key_value_slicing = (
-                self.num_key_value_heads * self.head_dim
-            ) // self.config.pretraining_tp
-            query_slices = self.q_proj.weight.split(
-                (self.num_heads * self.head_dim) // self.config.pretraining_tp, dim=0
+    def _attn(
+        self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        if query.shape[-2] == 1:
+            return self.ann(  # type:ignore[no-any-return]
+                query, key, value, logmask.broadcast_to(key.unsqueeze(-3).shape[:-1])
             )
-            key_slices = self.k_proj.weight.split(key_value_slicing, dim=0)
-            value_slices = self.v_proj.weight.split(key_value_slicing, dim=0)
-
-            query_states = [
-                F.linear(hidden_states, query_slices[i])
-                for i in range(self.config.pretraining_tp)
-            ]
-            query_states = torch.cat(query_states, dim=-1)
-
-            key_states = [
-                F.linear(hidden_states, key_slices[i])
-                for i in range(self.config.pretraining_tp)
-            ]
-            key_states = torch.cat(key_states, dim=-1)
-
-            value_states = [
-                F.linear(hidden_states, value_slices[i])
-                for i in range(self.config.pretraining_tp)
-            ]
-            value_states = torch.cat(value_states, dim=-1)
-
-        else:
-            query_states = self.q_proj(hidden_states)
-            key_states = self.k_proj(hidden_states)
-            value_states = self.v_proj(hidden_states)
-
-        query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-        value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-
-        kv_seq_len = key_states.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-        query_states, key_states = apply_rotary_pos_emb(
-            query_states, key_states, cos, sin, position_ids
-        )
-
-        if past_key_value is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
-
-        past_key_value = (key_states, value_states) if use_cache else None
-
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
-        # Only enable ANN during autoregressive generation
-        if query_states.shape[-2] == 1:
-            ann_mask = self.ann(query_states, key_states, attention_mask)
-            if self.ann_masks is not None:
-                self.ann_masks.append(ann_mask)
-            attention_mask = torch.finfo(attention_mask.dtype).min * ~ann_mask
-
-        attn_weights = torch.matmul(
-            query_states, key_states.transpose(2, 3)
-        ) / math.sqrt(self.head_dim)
-
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                "Attention weights should be of size"
-                f" {(bsz, self.num_heads, q_len, kv_seq_len)}, but is"
-                f" {attn_weights.size()}"
-            )
-
-        if attention_mask is not None:
-            # if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-            #     raise ValueError(
-            #         "Attention mask should be of size "
-            #         f"{(bsz, 1, q_len, kv_seq_len)}, but is {attention_mask.size()}"
-            #     )
-            attn_weights = attn_weights + attention_mask
-
-        # upcast attention to fp32
-        attn_weights = nn.functional.softmax(
-            attn_weights, dim=-1, dtype=torch.float32
-        ).to(query_states.dtype)
-        attn_output = torch.matmul(attn_weights, value_states)
-
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
-            raise ValueError(
-                "`attn_output` should be of size"
-                f" {(bsz, self.num_heads, q_len, self.head_dim)}, but is"
-                f" {attn_output.size()}"
-            )
-
-        attn_output = attn_output.transpose(1, 2).contiguous()
-
-        attn_output = attn_output.reshape(bsz, q_len, self.hidden_size)
-
-        if self.config.pretraining_tp > 1:
-            attn_output = attn_output.split(
-                self.hidden_size // self.config.pretraining_tp, dim=2
-            )
-            o_proj_slices = self.o_proj.weight.split(
-                self.hidden_size // self.config.pretraining_tp, dim=1
-            )
-            attn_output = sum(
-                [
-                    F.linear(attn_output[i], o_proj_slices[i])
-                    for i in range(self.config.pretraining_tp)
-                ]
-            )
-        else:
-            attn_output = self.o_proj(attn_output)
-
-        if not output_attentions:
-            attn_weights = None
-
-        return attn_output, attn_weights, past_key_value
+        return super()._attn(query, key, value, logmask)
 
 
-def convert_gptneox(
-    model: GPTNeoXForCausalLM, settings: Settings
-) -> GPTNeoXForCausalLM:
-    """Convert a GPT-NeoX model to use (simulated) KV cache compression using ANN."""
+def convert(
+    model: Union[GPTNeoXForCausalLM, LlamaForCausalLM], settings: Settings
+) -> Union[GPTNeoXForCausalLM, LlamaForCausalLM]:
+    """Convert a model to use KV cache compression using ANN."""
 
-    def _convert(m: nn.Module, **args: Any) -> None:
-        for name, child in m.named_children():
-            if isinstance(child, GPTNeoXAttention):
-                replacement = GPTNeoXAttentionWithANN(**args)
-                replacement.to(next(child.parameters()).dtype)
-                replacement.load_state_dict(child.state_dict(), strict=False)
-                setattr(m, name, replacement)
-            _convert(child, **args)
+    def _replace(m: nn.Module) -> Optional[nn.Module]:
+        if isinstance(m, GPTNeoXAttention):
+            return GPTNeoXAttentionWithANN(model.config, settings)
+        if isinstance(m, LlamaAttention):
+            return LlamaAttentionWithANN(model.config, settings)
 
-    model = copy.deepcopy(model)
-    _convert(model, config=model.config, settings=settings)
-    return model
-
-
-def convert_llama(model: LlamaForCausalLM, settings: Settings) -> LlamaForCausalLM:
-    """Convert a Llama model to use (simulated) KV cache compression using ANN."""
-
-    def _convert(m: nn.Module, **args: Any) -> None:
-        for name, child in m.named_children():
-            if isinstance(child, LlamaAttention):
-                replacement = LlamaAttentionWithANN(**args)
-                replacement.to(next(child.parameters()).dtype)
-                replacement.load_state_dict(child.state_dict(), strict=False)
-                setattr(m, name, replacement)
-            _convert(child, **args)
-
-    model = copy.deepcopy(model)
-    _convert(model, config=model.config, settings=settings)
-    return model
+    return utility.convert_module(model, _replace)
