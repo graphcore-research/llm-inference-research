@@ -1,6 +1,8 @@
 .coverage*
 *.egg-info
+.mypy_cache
 __pycache__
+.pytest_cache
 slurm-*.out
 .venv
 .vscode
