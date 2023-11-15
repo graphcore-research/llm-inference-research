@@ -508,21 +508,23 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
         with torch.no_grad(), context(self.model) as model:
             idxs = [0] + list(range(prefill_length, full_length + 1))
             for i, j, k in zip(idxs, idxs[1:], idxs[2:]):
-                input_ids = full_input_ids[:, i:j]
-                position_ids = full_position_ids[:, i:j]
-                attention_mask = full_attention_mask[:, :j]
-                target_ids = full_input_ids[:, j:k]
+                input_ids = full_input_ids[:, i:j].to(model.device)
+                position_ids = full_position_ids[:, i:j].to(model.device)
+                attention_mask = full_attention_mask[:, :j].to(model.device)
+                target_ids = full_input_ids[:, j:k].to(model.device)
 
                 out = model(
-                    input_ids=input_ids.to(model.device),
-                    position_ids=position_ids.to(model.device),
-                    attention_mask=attention_mask.to(model.device),
+                    input_ids=input_ids,
+                    position_ids=position_ids,
+                    attention_mask=attention_mask,
                     past_key_values=past_key_values,
                 )
                 past_key_values = out.past_key_values
 
                 logits = out.logits[:, -1, :]
-                nll = F.cross_entropy(logits, target_ids.squeeze(-1), reduction="none")
+                nll = F.cross_entropy(
+                    logits, target_ids.squeeze(-1), reduction="none"
+                ).cpu()
                 nll.masked_fill_(1 - full_attention_mask[:, j:k].squeeze(-1), 0)
                 neg_log_likelihoods.append(nll)
 
