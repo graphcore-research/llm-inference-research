@@ -525,7 +525,7 @@ class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
                 nll = F.cross_entropy(
                     logits, target_ids.squeeze(-1), reduction="none"
                 ).cpu()
-                nll.masked_fill_(1 - full_attention_mask[:, j:k].squeeze(-1), 0)
+                nll.masked_fill_(~full_attention_mask[:, j:k].squeeze(-1).bool(), 0)
                 neg_log_likelihoods.append(nll)
 
         return torch.stack(neg_log_likelihoods, dim=1)
