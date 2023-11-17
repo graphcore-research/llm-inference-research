@@ -7,6 +7,7 @@ from . import (  # noqa: F401
     outcompare,
     qa,
     quantisation,
+    repetition,
     sparse_attention,
     summarisation,
     utility,

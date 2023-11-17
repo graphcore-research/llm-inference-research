@@ -25,6 +25,7 @@ from . import (
     eviction_attention,
     pipelined_models,
     qa,
+    repetition,
     sparse_attention,
     summarisation,
     utility,
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 
 
-TASKS = ["triviaqa", "squad", "cnn_dailymail", "wikitext_bpc"]
+TASKS = ["triviaqa", "squad", "cnn_dailymail", "wikitext_bpc", "repetition"]
 
 
 @dataclass
@@ -179,6 +180,11 @@ def _evaluate(
         data = bpc.WikiText.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = bpc.evaluate
+    if task.name == "repetition":
+        assert task.shots == 0
+        data = repetition.Shakespeare.data()
+        examples = [data[i] for i in range(task.samples)]
+        evaluate_fn = repetition.evaluate
 
     results = list(
         evaluate_fn(
@@ -193,7 +199,14 @@ def _evaluate(
         count=len(results),
         **{
             k: sum(x[k] for x in results) / len(results)
-            for k in ["prefill_length", "reference_length", "match", "rougeL", "bpc"]
+            for k in [
+                "prefill_length",
+                "reference_length",
+                "match",
+                "rougeL",
+                "bpc",
+                "match_length_char",
+            ]
             if k in results[0]
         },
     )
