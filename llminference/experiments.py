@@ -250,6 +250,8 @@ def run_one(xp: Experiment, progress: bool = True) -> Outcome:
     except Exception as error:
         out["error"] = repr(error)
         out["backtrace"] = traceback.format_exc()
+        logger.error(f"Error: {error}")
+        logger.error(traceback.format_exc())
     out["duration"] = time.time() - t0
     if xp.execution.wandb:
         wandb.summary.update(out)
