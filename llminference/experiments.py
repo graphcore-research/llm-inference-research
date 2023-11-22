@@ -172,21 +172,23 @@ def _evaluate(
             for i in range(task.samples)
         ]
         evaluate_fn: Any = qa.evaluate
-    if task.name == "cnn_dailymail":
+    elif task.name == "cnn_dailymail":
         assert task.shots == 0
         data = summarisation.CnnDailymail.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = summarisation.evaluate
-    if task.name == "wikitext_bpc":
+    elif task.name == "wikitext_bpc":
         assert task.shots == 0
         data = bpc.WikiText.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = bpc.evaluate
-    if task.name == "repetition":
+    elif task.name == "repetition":
         assert task.shots == 0
         data = repetition.Shakespeare.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = repetition.evaluate
+    else:
+        raise ValueError(f"Task {task.name} not found")
 
     results = list(
         evaluate_fn(
