@@ -102,11 +102,22 @@ def test_shakespeare() -> None:
 def test_evaluate_match_length() -> None:
     reference = "This is a sentence."
     generation = "This is b sentence. And is longer."
-    assert repetition.evaluate_match_length(generation, reference) == 8
+    assert repetition.evaluate_match_length(generation, reference) == dict(
+        match_length_char=8, reference_length_char=19
+    )
 
     # Check if it works for perfect match
     generation = "This is a sentence."
-    assert repetition.evaluate_match_length(generation, reference) == len(generation)
+    assert repetition.evaluate_match_length(generation, reference) == dict(
+        match_length_char=len(reference), reference_length_char=len(reference)
+    )
+
+    # Check leading space
+    reference = "\nThis is a sentence."
+    generation = "  This is b sentence. And is longer."
+    assert repetition.evaluate_match_length(generation, reference) == dict(
+        match_length_char=8, reference_length_char=len(reference) - 1
+    )
 
 
 def test_evaluate() -> None:
@@ -150,8 +161,8 @@ def test_evaluate() -> None:
                         "To be, or not to be: that is the question.\n or not"
                     )
                 ),
-                match_length_char=4,
-                reference_length_char=7,
+                match_length_char=3,
+                reference_length_char=6,
             ),
             dict(
                 id=21,
@@ -162,7 +173,7 @@ def test_evaluate() -> None:
                         "To be, or not to be: that is the question.\n that is"
                     )
                 ),
-                match_length_char=14,
-                reference_length_char=14,
+                match_length_char=13,
+                reference_length_char=13,
             ),
         ]

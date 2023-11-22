@@ -33,8 +33,10 @@ from . import (
 
 # A dictionary of code changes that may affect the numbers, which is always
 # logged alongside experiment results.
-# E.g. {"evaluate-regex-permissive-newlines": True}
-CODE_CHANGES: Dict[str, Any] = {"ann-local-token-for-free": True}
+CODE_CHANGES: Dict[str, Any] = {
+    "ann-local-token-for-free": True,
+    "repetition-ignore-leading-space": True,
+}
 
 WANDB_PROJECT = "sparse-attention"
 WANDB_URL = "https://wandb.sourcevertex.net"
