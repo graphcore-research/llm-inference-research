@@ -139,6 +139,15 @@ class SparsityMethods:
         return model
 
     @staticmethod
+    def local(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
+        model.generation_context = eval_adapter.patch_for_model(
+            "torch.nn.functional.softmax",
+            sparse_attention.local_softmax,
+            **settings,
+        )
+        return model
+
+    @staticmethod
     def eviction(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
         assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
         return eviction_attention.convert(

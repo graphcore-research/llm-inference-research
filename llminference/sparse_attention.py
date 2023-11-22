@@ -161,20 +161,25 @@ def sparse_softmax_fixed_p(
 
 def local_softmax(
     x: Tensor,
-    context_len: int,
-    apply_after_softmax: bool = True,
+    k: int,
+    initial_k: int = 0,
+    apply_after_softmax: bool = False,
     dim: int = -1,
 ) -> Tensor:
-    """Applies softmax across last dimension, keeping past context_len number
-    of values in the output.
+    """Applies softmax across last dimension, keeping k values.
+
+    Always keeps a maximum of `k` values.
+     - `k - initial_k` most recent
+     - `initial_k` oldest
 
     Args:
         x (Tensor): shape (batch_size, num_heads, q_len, k_len)
-        context_len (int): Keep context_len past output scores (t-context_len : t)
+        k (int): Keep `k` output scores
+        initial_k (int, optional): Keep `initial_k` from the beginning
         apply_after_softmax (bool, optional):
         If True, set corresponding softmax output elements to 0.
         If False, mask corresponding inputs to softmax to `finfo.min`.
-        Defaults to True.
+        Defaults to False.
         dim (int, optional): Assumed dim = -1.
 
     Returns:
@@ -182,7 +187,9 @@ def local_softmax(
     """
     assert dim == -1
     assert len(x.shape) >= 2
-    local_mask = causal_index(x) < context_len
+    index = causal_index(x)
+    max_index = index.max(dim=-1, keepdim=True).values
+    local_mask: Tensor = (index < k - initial_k) | (max_index - initial_k < index)
     if apply_after_softmax:
         return _softmax(x, dim=-1) * local_mask
     return _softmax(x.masked_fill(~local_mask, torch.finfo(x.dtype).min), dim=-1)
