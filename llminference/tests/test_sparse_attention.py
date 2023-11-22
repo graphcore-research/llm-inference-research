@@ -226,7 +226,7 @@ def test_local_softmax() -> None:
         ],
         dtype=torch.float32,
     )
-    context_len = 2
+    # k=2
     x_masked = torch.tensor(
         [
             [m, 8, m, m, m],
@@ -237,11 +237,29 @@ def test_local_softmax() -> None:
         dtype=torch.float32,
     )
     torch.testing.assert_close(
-        sa.local_softmax(x, context_len=context_len, apply_after_softmax=False),
+        sa.local_softmax(x, k=2, apply_after_softmax=False),
         F.softmax(x_masked, dim=-1),
     )
     torch.testing.assert_close(
-        sa.local_softmax(x, context_len=context_len, apply_after_softmax=True),
+        sa.local_softmax(x, k=2, apply_after_softmax=True),
+        F.softmax(x, dim=-1) * (x_masked != m),
+    )
+    # k=2, initial_k=1
+    x_masked = torch.tensor(
+        [
+            [m, 8, m, m, m],
+            [m, 2, 5, m, m],
+            [m, 14, m, 7, m],
+            [m, 4, m, m, 3],
+        ],
+        dtype=torch.float32,
+    )
+    torch.testing.assert_close(
+        sa.local_softmax(x, k=2, initial_k=1, apply_after_softmax=False),
+        F.softmax(x_masked, dim=-1),
+    )
+    torch.testing.assert_close(
+        sa.local_softmax(x, k=2, initial_k=1, apply_after_softmax=True),
         F.softmax(x, dim=-1) * (x_masked != m),
     )
 

@@ -33,8 +33,10 @@ from . import (
 
 # A dictionary of code changes that may affect the numbers, which is always
 # logged alongside experiment results.
-# E.g. {"evaluate-regex-permissive-newlines": True}
-CODE_CHANGES: Dict[str, Any] = {"ann-local-token-for-free": True}
+CODE_CHANGES: Dict[str, Any] = {
+    "ann-local-token-for-free": True,
+    "repetition-ignore-leading-space": True,
+}
 
 WANDB_PROJECT = "sparse-attention"
 WANDB_URL = "https://wandb.sourcevertex.net"
@@ -137,6 +139,15 @@ class SparsityMethods:
         return model
 
     @staticmethod
+    def local(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
+        model.generation_context = eval_adapter.patch_for_model(
+            "torch.nn.functional.softmax",
+            sparse_attention.local_softmax,
+            **settings,
+        )
+        return model
+
+    @staticmethod
     def eviction(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
         assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
         return eviction_attention.convert(
@@ -170,21 +181,23 @@ def _evaluate(
             for i in range(task.samples)
         ]
         evaluate_fn: Any = qa.evaluate
-    if task.name == "cnn_dailymail":
+    elif task.name == "cnn_dailymail":
         assert task.shots == 0
         data = summarisation.CnnDailymail.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = summarisation.evaluate
-    if task.name == "wikitext_bpc":
+    elif task.name == "wikitext_bpc":
         assert task.shots == 0
         data = bpc.WikiText.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = bpc.evaluate
-    if task.name == "repetition":
+    elif task.name == "repetition":
         assert task.shots == 0
         data = repetition.Shakespeare.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = repetition.evaluate
+    else:
+        raise ValueError(f"Task {task.name} not found")
 
     results = list(
         evaluate_fn(

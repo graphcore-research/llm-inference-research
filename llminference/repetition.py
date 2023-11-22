@@ -1,7 +1,7 @@
 """Methods for evaluating models on synthetic text-repetition task.
 """
 import re
-from typing import Any, Iterable, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import datasets
 from tqdm import tqdm
@@ -54,9 +54,17 @@ class Shakespeare:
         return datasets.Dataset.from_list(examples).shuffle(shuffle_seed)
 
 
-def evaluate_match_length(generation: str, reference: str) -> int:
+LEADING_SPACE_PATTERN = re.compile(r"^\s+")
+
+
+def evaluate_match_length(generation: str, reference: str) -> Dict[str, int]:
+    generation = LEADING_SPACE_PATTERN.sub("", generation)
+    reference = LEADING_SPACE_PATTERN.sub("", reference)
     diff_idxs = [i for i, (c1, c2) in enumerate(zip(generation, reference)) if c1 != c2]
-    return diff_idxs[0] if diff_idxs else len(reference)
+    return dict(
+        match_length_char=diff_idxs[0] if diff_idxs else len(reference),
+        reference_length_char=len(reference),
+    )
 
 
 PROMPT_PREFIX = "\n"
@@ -110,6 +118,5 @@ def evaluate(
                 # Needs to be in tokens for memory transfer calculation
                 prefill_length=prefill_length,
                 # Evaluate match length in characters
-                match_length_char=evaluate_match_length(output, b["reference"]),
-                reference_length_char=len(b["reference"]),
+                **evaluate_match_length(output, b["reference"]),
             )
