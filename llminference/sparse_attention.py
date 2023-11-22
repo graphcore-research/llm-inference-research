@@ -165,6 +165,7 @@ def local_softmax(
     initial_k: int = 0,
     apply_after_softmax: bool = False,
     dim: int = -1,
+    dtype: Optional[torch.dtype] = None,
 ) -> Tensor:
     """Applies softmax across last dimension, keeping k values.
 
@@ -187,6 +188,8 @@ def local_softmax(
     """
     assert dim == -1
     assert len(x.shape) >= 2
+    if dtype is not None:
+        x = x.to(dtype)
     index = causal_index(x)
     max_index = index.max(dim=-1, keepdim=True).values
     local_mask: Tensor = (index < k - initial_k) | (max_index - initial_k < index)
