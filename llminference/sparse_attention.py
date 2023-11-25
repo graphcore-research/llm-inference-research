@@ -59,8 +59,8 @@ def causal_index(score: Tensor) -> Tensor:
         token according to the mask, or -1 if the token is masked-out
     """
     mask = score_to_mask(score)
-    cumsum = mask.flip(-1).cumsum(-1).flip(-1)
-    return (cumsum - 1).masked_fill(~mask, -1)
+    cumsum = mask.flip(-1).cumsum(-1, dtype=torch.int32).flip(-1)
+    return cumsum.sub_(1).masked_fill_(mask.logical_not_(), -1)
 
 
 def sparse_softmax_fixed_k(
@@ -192,10 +192,12 @@ def local_softmax(
         x = x.to(dtype)
     index = causal_index(x)
     max_index = index.max(dim=-1, keepdim=True).values
-    local_mask: Tensor = (index < k - initial_k) | (max_index - initial_k < index)
+    local_mask = (index < k - initial_k).logical_or_(max_index - initial_k < index)
     if apply_after_softmax:
-        return _softmax(x, dim=-1) * local_mask
-    return _softmax(x.masked_fill(~local_mask, torch.finfo(x.dtype).min), dim=-1)
+        return _softmax(x, dim=-1).mul_(local_mask)
+    return _softmax(
+        x.masked_fill(local_mask.logical_not_(), torch.finfo(x.dtype).min), dim=-1
+    )
 
 
 @contextmanager
