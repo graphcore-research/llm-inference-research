@@ -1,4 +1,8 @@
-# Research LLM inference
+# LLM inference research
+
+Experimentation framework from Graphcore Research, used to explore the machine learning performance of post-training model adaptation for accelerating LLM inference.
+
+See: [SparQ Attention](https://arxiv.org/abs/2312.04985).
 
 ## Setup
 
@@ -18,3 +22,18 @@ pip install -r requirements.txt
 # Optional - notebooks
 git clone git@github.com:PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference.git --branch notebooks notebooks/
 ```
+
+## Development
+
+We use a script called `dev` to automate building, testing, etc.
+
+```bash
+./dev
+./dev --help
+```
+
+## License
+
+Copyright (c) 2023 Graphcore Ltd. Licensed under the MIT License.
+
+See [NOTICE.md](NOTICE.md) for further details.
