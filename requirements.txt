@@ -10,6 +10,7 @@ pytest-cov
 rouge-score
 tqdm
 torch
+torchaudio
 transformers==4.32.1
 types-regex
 types-setuptools
