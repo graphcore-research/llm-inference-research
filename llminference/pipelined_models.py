@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 from typing import Any, Optional, Tuple, Union, cast
 
 import torch

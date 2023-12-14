@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 import collections
 import unittest.mock as um
 from contextlib import contextmanager

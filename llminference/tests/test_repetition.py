@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 import unittest.mock as um
 from typing import Any, List
 

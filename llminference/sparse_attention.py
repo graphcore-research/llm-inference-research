@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 """Sparse attention mechanisms.
 
 Note the following definitions:

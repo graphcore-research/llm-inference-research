@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 """A basic evaluation harness for language model adaptation.
 
 The idea is to compare outputs against a reference model.

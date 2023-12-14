@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
 
 SCRIPT=$1
 
