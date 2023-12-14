@@ -209,7 +209,7 @@ class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
         output, weights = super()._attn(
             query, key, value, self.eviction.get_mask(attention_mask)
         )
-        self.eviction.update(weights, attention_mask[:,:,-1:,:])
+        self.eviction.update(weights, attention_mask[:, :, -1:, :])
         return output, weights
 
 
