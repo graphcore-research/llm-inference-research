@@ -6,7 +6,7 @@ See: [SparQ Attention](https://arxiv.org/abs/2312.04985).
 
 ## Setup
 
-See [notebooks:Eval.ipynb](https://github.com/PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference/blob/notebooks/Eval.ipynb) for usage.
+See [scripts/Eval.ipynb](scripts/Eval.ipynb) and [scripts/Quantisation.ipynb](scripts/Quantisation.ipynb) for usage.
 
 ```bash
 python3 -m venv .venv
