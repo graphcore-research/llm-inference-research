@@ -16,7 +16,8 @@ python3 -m venv .venv
 
 source .venv/bin/activate
 pip install wheel
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# On a CPU-only machine, you may need to run this before `pip install -r requirements.txt`
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
 
 # Optional - notebooks
