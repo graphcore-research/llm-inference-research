@@ -23,9 +23,9 @@ import datasets
 import rouge_score.rouge_scorer
 from tqdm import tqdm
 
-from . import utility
-from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext
-from .utility import AnyDict
+from .. import utility
+from ..eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext
+from ..utility import AnyDict
 
 
 class CnnDailymail:

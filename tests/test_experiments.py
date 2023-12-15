@@ -6,7 +6,7 @@ import os
 import unittest.mock as um
 from pathlib import Path
 
-from .. import experiments
+from llminference import experiments
 
 
 def test_run_one(tmp_path: Path) -> None:

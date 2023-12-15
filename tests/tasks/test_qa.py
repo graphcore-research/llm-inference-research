@@ -6,8 +6,8 @@ from typing import Any, List
 
 import pytest
 
-from .. import qa
-from ..eval_adapter import Adapter
+from llminference.eval_adapter import Adapter
+from llminference.tasks import qa
 
 
 def test_datasets() -> None:

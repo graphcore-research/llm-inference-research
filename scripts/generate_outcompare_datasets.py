@@ -36,7 +36,7 @@ if __name__ == "__main__":
         ],
         "mosaicml/mpt-7b",
     ]:
-        data = L.outcompare.generate_dataset(
+        data = L.tasks.outcompare.generate_dataset(
             name,
             prompt_length=128,
             completion_length=64,

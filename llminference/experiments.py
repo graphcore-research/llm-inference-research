@@ -20,18 +20,10 @@ from transformers import PreTrainedModel
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 
-from . import (
-    ann_attention,
-    bpc,
-    eval_adapter,
-    eviction_attention,
-    pipelined_models,
-    qa,
-    repetition,
-    sparse_attention,
-    summarisation,
-    utility,
-)
+from . import eval_adapter, utility
+from .methods import ann_attention, eviction_attention, sparse_attention
+from .models import pipelined_models
+from .tasks import bpc, qa, repetition, summarisation
 
 # A dictionary of code changes that may affect the numbers, which is always
 # logged alongside experiment results.

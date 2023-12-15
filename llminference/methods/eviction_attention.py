@@ -29,7 +29,9 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaAttention, LlamaForCausalLM
 
-from . import llama_attention, sparse_attention, utility
+from .. import utility
+from ..models import llama_attention
+from . import sparse_attention
 
 
 @dataclass

@@ -8,8 +8,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 import datasets
 from tqdm import tqdm
 
-from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext
-from .utility import AnyDict, batches
+from ..eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext
+from ..utility import AnyDict, batches
 
 
 def split_on_whitespace(text: str, length: int) -> Iterable[Tuple[int, str]]:

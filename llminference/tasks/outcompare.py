@@ -19,7 +19,7 @@ import tqdm
 import transformers
 from torch import Tensor
 
-from . import utility
+from .. import utility
 
 
 @dataclass

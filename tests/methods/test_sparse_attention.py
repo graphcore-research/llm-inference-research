@@ -6,8 +6,8 @@ from functools import partialmethod
 import torch
 import torch.nn.functional as F
 
-from .. import sparse_attention as sa
-from ..eval_adapter import Adapter
+from llminference.eval_adapter import Adapter
+from llminference.methods import sparse_attention as sa
 
 # Note: these tests use `finfo(float16).min` for masking, even though they are
 # run with float32 inputs. This matches gpt_neox's masking behaviour (the softmax
@@ -276,7 +276,7 @@ def test_sparse_attn_vary_k_per_layer() -> None:
         "transformers.models.gpt_neox.modeling_gpt_neox.GPTNeoXAttention._attn",
         partialmethod(sa.sparse_attn, k_per_layer=k_per_layer),
     ), um.patch(
-        "llminference.sparse_attention.sparse_softmax_fixed_k",
+        "llminference.methods.sparse_attention.sparse_softmax_fixed_k",
         wraps=sa.sparse_softmax_fixed_k,
     ) as mock_softmax:
         m(**inp)

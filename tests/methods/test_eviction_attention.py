@@ -6,8 +6,8 @@ from torch import tensor
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 
-from .. import eval_adapter
-from .. import eviction_attention as ea
+from llminference import eval_adapter
+from llminference.methods import eviction_attention as ea
 
 
 @pytest.mark.parametrize("strategy", ["sum_weight", "lru"])

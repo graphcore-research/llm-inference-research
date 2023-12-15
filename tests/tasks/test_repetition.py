@@ -3,8 +3,8 @@
 import unittest.mock as um
 from typing import Any, List
 
-from .. import repetition
-from ..eval_adapter import Adapter
+from llminference.eval_adapter import Adapter
+from llminference.tasks import repetition
 
 
 def test_split_on_whitespace() -> None:

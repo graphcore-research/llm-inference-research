@@ -7,7 +7,7 @@ from typing import cast
 import torch
 import torch.nn.functional as F
 
-from .. import quantisation
+from llminference.methods import quantisation
 
 
 def test_int_format() -> None:
