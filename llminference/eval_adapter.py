@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 import hashlib
 import logging
 import os
@@ -18,7 +20,6 @@ from typing import (
     cast,
 )
 
-import lm_eval.base
 import torch
 import torch.nn.functional as F
 import transformers
@@ -54,8 +55,8 @@ def patch_for_model(
 DEFAULT_CACHE_DIR = f"/net/group/research/{os.environ.get('USER')}/cache"
 
 
-class Adapter(lm_eval.base.BaseLM):  # type:ignore[misc]
-    """A simplified adapter for lm_eval <-> HuggingFace."""
+class Adapter:
+    """A simplified interface for HuggingFace models paired with a tokeniser."""
 
     DEFAULT_BATCH_SIZE = 32
 

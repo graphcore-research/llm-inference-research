@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 """Approximate nearest neighbour methods that approximate `Q @ K.T`."""
 
 from dataclasses import dataclass

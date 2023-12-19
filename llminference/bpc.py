@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 """Method for evaluating models for bits-per-character.
 
 For example:

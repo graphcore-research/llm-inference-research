@@ -1,11 +1,14 @@
 #!/usr/bin/env python
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
 
 """Dev task launcher."""
 
 import argparse
+import datetime
 import os
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any, Callable, Iterable, List, Optional, TypeVar
 
 # Utilities
@@ -80,12 +83,50 @@ def format(check: bool) -> None:
     run(["python", "-m", "isort", "--check" if check else None, *PYTHON_ROOTS])
 
 
+@cli()
+def copyright() -> None:
+    """check for Graphcore copyright headers on relevant files"""
+    command = (
+        f"find {' '.join(PYTHON_ROOTS)} -type f -not -name *.pyc"
+        " | xargs grep -L 'Copyright (c) 202. Graphcore Ltd[.] All rights reserved[.]'"
+    )
+    print(f"$ {command}", file=sys.stderr)
+    # Note: grep exit codes are not consistent between versions, so we don't use
+    # check=True
+    output = (
+        subprocess.run(
+            command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+        )
+        .stdout.decode()
+        .strip()
+    )
+    if output:
+        print(
+            "Error - failed copyright header check in:\n   "
+            + output.replace("\n", "\n   "),
+            file=sys.stderr,
+        )
+        print("Template(s):")
+        comment_prefixes = {
+            {".cpp": "//"}.get(Path(f).suffix, "#") for f in output.split("\n")
+        }
+        for prefix in comment_prefixes:
+            print(
+                (
+                    f"{prefix} Copyright (c) {datetime.datetime.now().year}"
+                    " Graphcore Ltd. All rights reserved."
+                ),
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+
 @cli(
     "-s",
     "--skip",
     nargs="*",
     default=[],
-    choices=["tests", "lint", "format"],
+    choices=["tests", "lint", "format", "copyright"],
     help="commands to skip",
 )
 def ci(skip: List[str]) -> None:
@@ -96,6 +137,8 @@ def ci(skip: List[str]) -> None:
         lint()
     if "format" not in skip:
         format(check=True)
+    if "copyright" not in skip:
+        copyright()
 
 
 # Script

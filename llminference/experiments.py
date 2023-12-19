@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 """High-level experiment interface, supporting multiple tasks, models & logging."""
 
 import dataclasses

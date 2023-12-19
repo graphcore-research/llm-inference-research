@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
 
 SCRIPT=$1
 
@@ -12,7 +13,6 @@ echo "export TOKENIZERS_PARALLELISM=true" >> "${VENV}/bin/activate"
 source "${VENV}/bin/activate"
 pip install wheel
 pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
-pip install -e third_party/lm-evaluation-harness
 pip install .
 
 echo -e "\n\nRUNNING ${SCRIPT}"

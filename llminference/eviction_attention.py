@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 """Implements KV cache eviction schemes.
 
 Note that these schemes only evict KV entries between model.forward() calls,

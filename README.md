@@ -1,8 +1,12 @@
-# Research LLM inference
+# LLM inference research
+
+Experimentation framework from Graphcore Research, used to explore the machine learning performance of post-training model adaptation for accelerating LLM inference.
+
+See: [SparQ Attention](https://arxiv.org/abs/2312.04985).
 
 ## Setup
 
-See [notebooks:Eval.ipynb](https://github.com/PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference/blob/notebooks/Eval.ipynb) for usage.
+See [scripts/Eval.ipynb](scripts/Eval.ipynb) and [scripts/Quantisation.ipynb](scripts/Quantisation.ipynb) for usage.
 
 ```bash
 python3 -m venv .venv
@@ -11,19 +15,26 @@ python3 -m venv .venv
     export TOKENIZERS_PARALLELISM=true
 
 source .venv/bin/activate
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip install wheel
+# On a CPU-only machine, you may need to run this before `pip install -r requirements.txt`
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
-
-# Patch & install Eleuther's LM harness
-mkdir -p third_party
-git clone https://github.com/EleutherAI/lm-evaluation-harness.git third_party/lm-evaluation-harness
-git -C third_party/lm-evaluation-harness reset --hard d145167
-git -C third_party/lm-evaluation-harness apply ../lm-evaluation-harness.patch
-pip install -e third_party/lm-evaluation-harness/
-
-# Optional - reference data for `llminference.outcompare`
-git clone git@github.com:PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference.git --branch data data/
 
 # Optional - notebooks
 git clone git@github.com:PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference.git --branch notebooks notebooks/
 ```
+
+## Development
+
+We use a script called `dev` to automate building, testing, etc.
+
+```bash
+./dev
+./dev --help
+```
+
+## License
+
+Copyright (c) 2023 Graphcore Ltd. Licensed under the MIT License.
+
+See [NOTICE.md](NOTICE.md) for further details.

@@ -1,3 +1,5 @@
+# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+
 """Methods for evaluating models on synthetic text-repetition task.
 """
 import re
