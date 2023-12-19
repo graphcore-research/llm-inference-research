@@ -10,7 +10,7 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
 )
 from transformers.models.llama.modeling_llama import LlamaDecoderLayer, LlamaForCausalLM
 
-from . import utility
+from .. import utility
 
 
 class PipelinedLlamaDecoderLayer(LlamaDecoderLayer):  # type:ignore[misc]

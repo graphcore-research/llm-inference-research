@@ -5,8 +5,8 @@ from math import log2
 import numpy as np
 import torch
 
-from .. import bpc
-from ..eval_adapter import Adapter
+from llminference.eval_adapter import Adapter
+from llminference.tasks import bpc
 
 
 def test_wikitext() -> None:

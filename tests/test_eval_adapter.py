@@ -9,7 +9,7 @@ from typing import Dict, Iterator, Optional, cast
 import torch
 from torch import Tensor
 
-from .. import eval_adapter
+from llminference import eval_adapter
 
 
 def test_get_cache_str() -> None:

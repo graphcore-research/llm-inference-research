@@ -10,7 +10,7 @@ from typing import Any, Dict
 import datasets
 import pytest
 
-from .. import utility
+from llminference import utility
 
 
 def test_batches() -> None:

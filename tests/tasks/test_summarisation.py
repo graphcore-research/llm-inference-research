@@ -3,8 +3,8 @@
 import unittest.mock as um
 from typing import Any, List
 
-from .. import summarisation
-from ..eval_adapter import Adapter
+from llminference.eval_adapter import Adapter
+from llminference.tasks import summarisation
 
 
 def test_cnn_dailymail() -> None:

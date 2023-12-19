@@ -26,8 +26,8 @@ import numpy as np
 import regex as re
 from tqdm import tqdm
 
-from .eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext
-from .utility import AnyDict, batches, map_full_batch
+from ..eval_adapter import DEFAULT_CACHE_DIR, Adapter, ModelContext
+from ..utility import AnyDict, batches, map_full_batch
 
 
 class TriviaQA:

@@ -43,7 +43,7 @@ def cli(*args: Any, **kwargs: Any) -> Callable[[T], T]:
 
 # Commands
 
-PYTHON_ROOTS = ["llminference", "scripts", "dev", "setup.py"]
+PYTHON_ROOTS = ["llminference", "tests", "scripts", "dev", "setup.py"]
 
 
 @cli("-k", "--filter")
@@ -55,7 +55,7 @@ def tests(filter: Optional[str], nocapture: bool) -> None:
             "python",
             "-m",
             "pytest",
-            "llminference",
+            "tests",
             None if filter else "--cov=llminference",
             *(["-k", filter] if filter else []),
             "--capture=no" if nocapture else None,

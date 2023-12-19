@@ -2,7 +2,7 @@
 
 import transformers
 
-from .. import outcompare
+from llminference.tasks import outcompare
 
 
 def test_outcompare() -> None:

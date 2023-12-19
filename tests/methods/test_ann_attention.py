@@ -6,8 +6,8 @@ import torch
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 
-from .. import ann_attention as ann
-from .. import eval_adapter
+from llminference import eval_adapter
+from llminference.methods import ann_attention as ann
 
 
 def test_gather() -> None:

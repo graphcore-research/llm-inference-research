@@ -28,9 +28,9 @@ import torch
 from torch import Tensor
 from tqdm import tqdm
 
-from . import utility
-from .eval_adapter import Adapter, ModelContext
-from .utility import AnyDict
+from .. import utility
+from ..eval_adapter import Adapter, ModelContext
+from ..utility import AnyDict
 
 
 class WikiText:
