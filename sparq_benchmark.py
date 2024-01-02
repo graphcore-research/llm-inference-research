@@ -126,7 +126,7 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
     return run
 
 
-def run(b: Benchmark) -> List[float]:
+def run(b: Benchmark, progress: bool = True) -> List[float]:
     device = torch.device(b.device)
     dtype = getattr(torch, b.dtype)
 
@@ -146,7 +146,7 @@ def run(b: Benchmark) -> List[float]:
         duration=[],
         std=[],
     )
-    for _ in tqdm.tqdm(list(range(b.reps))):
+    for _ in tqdm.tqdm(list(range(b.reps)), disable=not progress):
         torch.randn(*Q.shape, out=Q)
         if device.type == "cuda":
             torch.cuda.synchronize(device)
