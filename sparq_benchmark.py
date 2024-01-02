@@ -93,6 +93,7 @@ class Results:
     device_name: str
     torch_version: str
     revision: str
+    error: Optional[str]
 
 
 def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]:
@@ -142,16 +143,6 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
 def run(b: Benchmark, progress: bool = True) -> Results:
     device = torch.device(b.device)
     dtype = getattr(torch, b.dtype)
-
-    Q = torch.empty((b.batch_size, b.n_head, 1, b.head_dim), device=device, dtype=dtype)
-    K = torch.randn(
-        (b.batch_size, b.n_head, b.sequence_length, b.head_dim),
-        device=device,
-        dtype=dtype,
-    )
-    V = torch.randn_like(K)
-    runner = get_runner(b, K, V)
-
     device_name = (
         torch.cuda.get_device_name(device)
         if device.type == "cuda"
@@ -160,24 +151,37 @@ def run(b: Benchmark, progress: bool = True) -> Results:
     revision = (
         subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().rstrip("\n")
     )
-
     results = Results(
         # Metadata
         device_name=device_name,
         torch_version=torch.__version__,
         revision=revision,
+        error=None,
         # Stats
         duration=[],
         std=[],
     )
-    for _ in tqdm.tqdm(list(range(b.reps)), disable=not progress):
-        torch.randn(*Q.shape, out=Q)
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-        t0 = time.time()
-        y = runner(Q)
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-        results.duration.append(time.time() - t0)
-        results.std.append(float(y.std()))
+    try:
+        Q = torch.empty(
+            (b.batch_size, b.n_head, 1, b.head_dim), device=device, dtype=dtype
+        )
+        K = torch.randn(
+            (b.batch_size, b.n_head, b.sequence_length, b.head_dim),
+            device=device,
+            dtype=dtype,
+        )
+        V = torch.randn_like(K)
+        runner = get_runner(b, K, V)
+        for _ in tqdm.tqdm(list(range(b.reps)), disable=not progress):
+            torch.randn(*Q.shape, out=Q)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            t0 = time.time()
+            y = runner(Q)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            results.duration.append(time.time() - t0)
+            results.std.append(float(y.std()))
+    except torch.cuda.OutOfMemoryError as error:
+        results.error = repr(error)
     return results
