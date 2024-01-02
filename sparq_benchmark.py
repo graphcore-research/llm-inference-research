@@ -1,4 +1,5 @@
 import os
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Callable, List, Optional
@@ -15,7 +16,7 @@ def attn(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
     return torch.softmax(QK, dim=-1) @ V
 
 
-def gather(t: Tensor, dim: int, i: int) -> Tensor:
+def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
     dim += (dim < 0) * t.ndim
     return t.gather(dim, i.expand(*t.shape[:dim], i.shape[dim], *t.shape[dim + 1 :]))
 
@@ -24,23 +25,24 @@ def sparq_attn(
     Q: Tensor, K1: Tensor, K2: Tensor, V: Tensor, V_mean: Tensor, r: int, k: int
 ) -> Tensor:
     # 1. Approximate attention scores using r largest components of Q
-    i1 = torch.topk(torch.abs(Q), r, -1).indices
+    absQ = torch.abs(Q)
+    absQ_hat, i1 = torch.topk(absQ, r, -1)
     Q_hat, K_hat = gather(Q, -1, i1), gather(K1, -1, i1)
     scale = torch.sqrt(
         Q.shape[-1]
-        * torch.abs(Q_hat).sum(dim=-1, keepdim=True)
-        / torch.abs(Q).sum(dim=-1, keepdim=True)
+        * absQ_hat.sum(dim=-1, keepdim=True)
+        / absQ.sum(dim=-1, keepdim=True)
     )
-    s_hat = torch.softmax(Q_hat @ K_hat.transpose(-1, -2) / scale, dim=-1)
+    s_hat = torch.softmax((Q_hat @ K_hat.transpose(-1, -2)).div_(scale), dim=-1)
 
     # 2. Gather top k positions based on approximate attention scores & run attention
-    i2 = torch.topk(s_hat, k, -1).indices
+    s_hat_i2, i2 = torch.topk(s_hat, k, -1)
     iKV = i2[..., 0, :, None]
     K, V = gather(K2, -2, iKV), gather(V, -2, iKV)
     y_ = attn(Q, K, V)
 
     # 3. Estimate the total score of the top k, and interpolate with V_mean
-    alpha = gather(s_hat, -1, i2).sum(-1, keepdim=True)
+    alpha = s_hat_i2.sum(-1, keepdim=True)
     return alpha * y_ + (1 - alpha) * V_mean
 
 
@@ -50,7 +52,7 @@ def sparq_attn(
 @dataclass
 class Benchmark:
     method: str  # "empty|dense|sparq"
-    kernel: str  # "empty|auto|flash|math|mem_efficient|vanilla"
+    kernel: str  # "empty|vanilla|compiled|auto|flash|math|mem_efficient"
     # Generic
     batch_size: int
     n_head: int
@@ -61,9 +63,9 @@ class Benchmark:
     # Benchmark
     reps: int
     # Method-specific
-    rank: Optional[int] = None
-    k_values: Optional[int] = None
-    double_k: Optional[bool] = None
+    k1: Optional[int] = None
+    k2: Optional[int] = None
+    store_k_twice: Optional[bool] = None
 
     @property
     def dense_flops(self) -> float:
@@ -89,24 +91,29 @@ class Results:
     duration: List[float]
     std: List[float]
     device_name: str
+    torch_version: str
+    revision: str
 
 
 def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]:
-    if b.method == "sparq" and b.kernel == "vanilla":
-        if b.rank is None or b.k_values is None or b.double_k is None:
-            raise ValueError(
-                "Must specify {rank, k_values, double_k} for sparq attention"
-            )
+    if b.method == "sparq":
+        if b.k1 is None or b.k2 is None or b.store_k_twice is None:
+            raise ValueError("Must specify {k1, k2, store_k_twice} for sparq attention")
         V_mean = V.mean(dim=-2, keepdim=True)
         K1 = K2 = K
-        if b.double_k:
+        if b.store_k_twice:
             K1 = K.swapdims(-1, -2).contiguous().swapdims(-1, -2)
+
+    attn_compiled = torch.compile(attn)
+    sparq_attn_compiled = torch.compile(sparq_attn)
 
     def run(Q: Tensor) -> Tensor:
         if b.method == "empty" and b.kernel == "empty":
             return Q
         if b.method == "dense" and b.kernel == "vanilla":
             return attn(Q, K, V)
+        if b.method == "dense" and b.kernel == "compiled":
+            return attn_compiled(Q, K, V)
         if b.method == "dense" and b.kernel in [
             "auto",
             "flash",
@@ -114,19 +121,25 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
             "mem_efficient",
         ]:
             with torch.backends.cuda.sdp_kernel(
-                enable_flash=(kernel == "auto" or kernel == "flash"),
-                enable_math=(kernel == "auto" or kernel == "math"),
-                enable_mem_efficient=(kernel == "auto" or kernel == "mem_efficient"),
+                enable_flash=(b.kernel == "auto" or b.kernel == "flash"),
+                enable_math=(b.kernel == "auto" or b.kernel == "math"),
+                enable_mem_efficient=(
+                    b.kernel == "auto" or b.kernel == "mem_efficient"
+                ),
             ):
                 return torch.nn.functional.scaled_dot_product_attention(Q, K, V)
         if b.method == "sparq" and b.kernel == "vanilla":
-            return sparq_attn(Q, K1, K2, V, V_mean=V_mean, r=b.rank, k=b.k_values)
+            assert b.k1 and b.k2
+            return sparq_attn(Q, K1, K2, V, V_mean=V_mean, r=b.k1, k=b.k2)
+        if b.method == "sparq" and b.kernel == "compiled":
+            assert b.k1 and b.k2
+            return sparq_attn_compiled(Q, K1, K2, V, V_mean=V_mean, r=b.k1, k=b.k2)
         raise ValueError(f"(method, kernel) = ({b.method}, {b.kernel}) was not found")
 
     return run
 
 
-def run(b: Benchmark, progress: bool = True) -> List[float]:
+def run(b: Benchmark, progress: bool = True) -> Results:
     device = torch.device(b.device)
     dtype = getattr(torch, b.dtype)
 
@@ -139,10 +152,21 @@ def run(b: Benchmark, progress: bool = True) -> List[float]:
     V = torch.randn_like(K)
     runner = get_runner(b, K, V)
 
-    results = Results(
-        device_name=torch.cuda.get_device_name(device)
+    device_name = (
+        torch.cuda.get_device_name(device)
         if device.type == "cuda"
-        else f"cpu-{os.cpu_count()}",
+        else f"cpu-{os.cpu_count()}"
+    )
+    revision = (
+        subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().rstrip("\n")
+    )
+
+    results = Results(
+        # Metadata
+        device_name=device_name,
+        torch_version=torch.__version__,
+        revision=revision,
+        # Stats
         duration=[],
         std=[],
     )
