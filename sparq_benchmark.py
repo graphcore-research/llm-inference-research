@@ -22,11 +22,11 @@ def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
 
 
 def sparq_attn(
-    Q: Tensor, K1: Tensor, K2: Tensor, V: Tensor, V_mean: Tensor, r: int, k: int
+    Q: Tensor, K1: Tensor, K2: Tensor, V: Tensor, V_mean: Tensor, k1: int, k2: int
 ) -> Tensor:
-    # 1. Approximate attention scores using r largest components of Q
+    # 1. Approximate attention scores using k1 largest components of Q
     absQ = torch.abs(Q)
-    absQ_hat, i1 = torch.topk(absQ, r, -1)
+    absQ_hat, i1 = torch.topk(absQ, k1, -1)
     Q_hat, K_hat = gather(Q, -1, i1), gather(K1, -1, i1)
     scale = torch.sqrt(
         Q.shape[-1]
@@ -35,8 +35,8 @@ def sparq_attn(
     )
     s_hat = torch.softmax((Q_hat @ K_hat.transpose(-1, -2)).div_(scale), dim=-1)
 
-    # 2. Gather top k positions based on approximate attention scores & run attention
-    s_hat_i2, i2 = torch.topk(s_hat, k, -1)
+    # 2. Gather top k2 positions based on approximate attention scores & run attention
+    s_hat_i2, i2 = torch.topk(s_hat, k2, -1)
     iKV = i2[..., 0, :, None]
     K, V = gather(K2, -2, iKV), gather(V, -2, iKV)
     y_ = attn(Q, K, V)
@@ -131,10 +131,10 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
                 return torch.nn.functional.scaled_dot_product_attention(Q, K, V)
         if b.method == "sparq" and b.kernel == "vanilla":
             assert b.k1 and b.k2
-            return sparq_attn(Q, K1, K2, V, V_mean=V_mean, r=b.k1, k=b.k2)
+            return sparq_attn(Q, K1, K2, V, V_mean=V_mean, k1=b.k1, k2=b.k2)
         if b.method == "sparq" and b.kernel == "compiled":
             assert b.k1 and b.k2
-            return sparq_attn_compiled(Q, K1, K2, V, V_mean=V_mean, r=b.k1, k=b.k2)
+            return sparq_attn_compiled(Q, K1, K2, V, V_mean=V_mean, k1=b.k1, k2=b.k2)
         raise ValueError(f"(method, kernel) = ({b.method}, {b.kernel}) was not found")
 
     return run
