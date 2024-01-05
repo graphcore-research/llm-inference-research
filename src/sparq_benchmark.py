@@ -8,6 +8,8 @@ import torch
 import tqdm
 from torch import Tensor
 
+from gather_inner_bmv import gather_inner_bmv
+
 # Methods
 
 
@@ -22,18 +24,41 @@ def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
 
 
 def sparq_attn(
-    Q: Tensor, K1: Tensor, K2: Tensor, V: Tensor, V_mean: Tensor, k1: int, k2: int
+    Q: Tensor,
+    K1: Tensor,
+    K2: Tensor,
+    V: Tensor,
+    V_mean: Tensor,
+    k1: int,
+    k2: int,
+    gather_matmul: str,  # "auto|torch|custom"
 ) -> Tensor:
+    if gather_matmul == "auto":
+        gather_matmul = "custom" if Q.device.type == "cuda" else "torch"
+
     # 1. Approximate attention scores using k1 largest components of Q
     absQ = torch.abs(Q)
     absQ_hat, i1 = torch.topk(absQ, k1, -1)
-    Q_hat, K_hat = gather(Q, -1, i1), gather(K1, -1, i1)
     scale = torch.sqrt(
         Q.shape[-1]
         * absQ_hat.sum(dim=-1, keepdim=True)
         / absQ.sum(dim=-1, keepdim=True)
     )
-    s_hat = torch.softmax((Q_hat @ K_hat.transpose(-1, -2)).div_(scale), dim=-1)
+    if gather_matmul == "torch":
+        Q_hat, K_hat = gather(Q, -1, i1), gather(K1, -1, i1)
+        s_hat = torch.softmax((Q_hat @ K_hat.transpose(-1, -2)).div_(scale), dim=-1)
+    if gather_matmul == "custom":
+        s_hat = torch.softmax(
+            gather_inner_bmv(
+                Q.flatten(end_dim=1),
+                K1.transpose(-1, -2).flatten(end_dim=1),
+                i1.view(-1, k1),
+                chunk=512,
+            )
+            .unflatten(0, Q.shape[:2])
+            .div_(scale),
+            dim=-1,
+        )
 
     # 2. Gather top k2 positions based on approximate attention scores & run attention
     s_hat_i2, i2 = torch.topk(s_hat, k2, -1)
@@ -66,6 +91,7 @@ class Benchmark:
     k1: Optional[int] = None
     k2: Optional[int] = None
     store_k_twice: Optional[bool] = None
+    gather_matmul: Optional[str] = None  # "auto|torch|custom"
 
     @property
     def dense_flops(self) -> float:
@@ -98,23 +124,28 @@ class Results:
 
 def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]:
     if b.method == "sparq":
-        if b.k1 is None or b.k2 is None or b.store_k_twice is None:
-            raise ValueError("Must specify {k1, k2, store_k_twice} for sparq attention")
+        if (
+            b.k1 is None
+            or b.k2 is None
+            or b.store_k_twice is None
+            or b.gather_matmul is None
+        ):
+            raise ValueError(
+                "Must specify {k1, k2, store_k_twice, gather_matmul} for sparq attention"
+            )
         V_mean = V.mean(dim=-2, keepdim=True)
         K1 = K2 = K
         if b.store_k_twice:
             K1 = K.swapdims(-1, -2).contiguous().swapdims(-1, -2)
 
-    attn_compiled = torch.compile(attn)
-    sparq_attn_compiled = torch.compile(sparq_attn)
+    attn_ = torch.compile(attn) if b.kernel == "compiled" else attn
+    sparq_attn_ = torch.compile(sparq_attn) if b.kernel == "compiled" else sparq_attn
 
     def run(Q: Tensor) -> Tensor:
         if b.method == "empty" and b.kernel == "empty":
             return Q
-        if b.method == "dense" and b.kernel == "vanilla":
-            return attn(Q, K, V)
-        if b.method == "dense" and b.kernel == "compiled":
-            return attn_compiled(Q, K, V)
+        if b.method == "dense" and b.kernel in ("vanilla", "compiled"):
+            return attn_(Q, K, V)
         if b.method == "dense" and b.kernel in [
             "auto",
             "flash",
@@ -129,12 +160,18 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
                 ),
             ):
                 return torch.nn.functional.scaled_dot_product_attention(Q, K, V)
-        if b.method == "sparq" and b.kernel == "vanilla":
+        if b.method == "sparq" and b.kernel in ("vanilla", "compiled"):
             assert b.k1 and b.k2
-            return sparq_attn(Q, K1, K2, V, V_mean=V_mean, k1=b.k1, k2=b.k2)
-        if b.method == "sparq" and b.kernel == "compiled":
-            assert b.k1 and b.k2
-            return sparq_attn_compiled(Q, K1, K2, V, V_mean=V_mean, k1=b.k1, k2=b.k2)
+            return sparq_attn_(
+                Q,
+                K1,
+                K2,
+                V,
+                V_mean=V_mean,
+                k1=b.k1,
+                k2=b.k2,
+                gather_matmul=b.gather_matmul,
+            )
         raise ValueError(f"(method, kernel) = ({b.method}, {b.kernel}) was not found")
 
     return run

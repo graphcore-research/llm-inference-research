@@ -14,7 +14,15 @@ def test_attn() -> None:
     actual = B.attn(Q, K, V)
     torch.testing.assert_close(actual, expected)
 
+    # When k==sequence_length, sparq_attn should produce the same result
     actual = B.sparq_attn(
-        Q, K, K, V, V_mean=V.mean(-2, keepdim=True), r=4, k=sequence_length
+        Q,
+        K,
+        K,
+        V,
+        V_mean=V.mean(-2, keepdim=True),
+        k1=4,
+        k2=sequence_length,
+        gather_matmul="auto",
     )
     torch.testing.assert_close(actual, expected)
