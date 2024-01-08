@@ -1,7 +1,7 @@
 import torch
 
 from sparq_benchmark import gather
-from gather_inner_bmv import gather_inner_bmv
+from gather_matmul import gather_inner_bmv
 
 
 def test_gather_inner_bmv() -> None:

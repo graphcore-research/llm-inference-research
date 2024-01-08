@@ -8,7 +8,7 @@ import torch
 import tqdm
 from torch import Tensor
 
-from gather_inner_bmv import gather_inner_bmv
+from gather_matmul import gather_inner_bmv
 
 # Methods
 
@@ -45,20 +45,15 @@ def sparq_attn(
         / absQ.sum(dim=-1, keepdim=True)
     )
     if gather_matmul == "torch":
-        Q_hat, K_hat = gather(Q, -1, i1), gather(K1, -1, i1)
-        s_hat = torch.softmax((Q_hat @ K_hat.transpose(-1, -2)).div_(scale), dim=-1)
+        QK_hat = gather(Q, -1, i1) @ gather(K1, -1, i1).transpose(-1, -2)
     if gather_matmul == "custom":
-        s_hat = torch.softmax(
-            gather_inner_bmv(
-                Q.flatten(end_dim=1),
-                K1.transpose(-1, -2).flatten(end_dim=1),
-                i1.view(-1, k1),
-                chunk=512,
-            )
-            .unflatten(0, Q.shape[:2])
-            .div_(scale),
-            dim=-1,
-        )
+        QK_hat = gather_inner_bmv(
+            Q.flatten(end_dim=1),
+            K1.transpose(-1, -2).flatten(end_dim=1),
+            i1.view(-1, k1),
+            chunk=512,
+        ).unflatten(0, Q.shape[:2])
+    s_hat = torch.softmax(QK_hat.div_(scale), dim=-1)
 
     # 2. Gather top k2 positions based on approximate attention scores & run attention
     s_hat_i2, i2 = torch.topk(s_hat, k2, -1)
