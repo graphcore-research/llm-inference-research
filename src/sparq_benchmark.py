@@ -2,7 +2,7 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Union
 
 import torch
 import tqdm
@@ -21,6 +21,11 @@ def attn(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
 def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
     dim += (dim < 0) * t.ndim
     return t.gather(dim, i.expand(*t.shape[:dim], i.shape[dim], *t.shape[dim + 1 :]))
+
+
+@torch.compile
+def _scaled_softmax(x: Tensor, divscale: Union[Tensor, float], dim: int) -> Tensor:
+    return torch.softmax(x / divscale, dim=dim)
 
 
 def sparq_attn(
@@ -46,28 +51,25 @@ def sparq_attn(
     )
     if gather_matmul == "torch":
         QK_hat = gather(Q, -1, i1) @ gather(K1, -1, i1).transpose(-1, -2)
-    elif gather_matmul.startswith("custom"):
+    elif gather_matmul == "custom":
         QK_hat = G.gather_inner_bmv(Q, K1.transpose(-1, -2), i1.squeeze(2), chunk=512)
-    s_hat = torch.softmax(QK_hat.div_(scale), dim=-1)
+    s_hat = _scaled_softmax(QK_hat, scale, dim=-1)
 
     # 2. Gather top k2 positions based on approximate attention scores & run attention
     s_hat_i2, i2 = torch.topk(s_hat, k2, -1)
     iKV = i2[..., 0, :, None]
-    if gather_matmul in ("torch", "custom"):
+    if gather_matmul == "torch":
         QK = Q @ gather(K2, -2, iKV).transpose(2, 3)
-    elif gather_matmul in ("custom2", "custom3"):
+    elif gather_matmul == "custom":
         QK = G.gather_outer_bmv(Q, K2.transpose(2, 3), iKV.squeeze(-1), chunk=128)
-
-    s = torch.softmax(QK.div_(Q.shape[-1] ** 0.5), dim=-1)
-
-    if gather_matmul in ("torch", "custom", "custom2"):
+    s = _scaled_softmax(QK, Q.shape[-1] ** 0.5, dim=-1)
+    if gather_matmul == "torch":
         y_ = s @ gather(V, -2, iKV)
-    elif gather_matmul == "custom3":
+    elif gather_matmul == "custom":
         y_ = G.gather_inner_matrix_only_bmv(s, V, iKV.squeeze(-1), chunk=64)
 
     # 3. Estimate the total score of the top k, and interpolate with V_mean
-    alpha = s_hat_i2.sum(-1, keepdim=True)
-    return alpha * y_ + (1 - alpha) * V_mean
+    return torch.lerp(V_mean, y_, s_hat_i2.sum(-1, keepdim=True))
 
 
 # Execution
