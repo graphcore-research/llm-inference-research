@@ -8,7 +8,7 @@ import torch
 import tqdm
 from torch import Tensor
 
-from gather_matmul import gather_inner_bmv
+from gather_matmul import gather_inner_bmv, gather_outer_bmv
 
 # Methods
 
@@ -46,20 +46,19 @@ def sparq_attn(
     )
     if gather_matmul == "torch":
         QK_hat = gather(Q, -1, i1) @ gather(K1, -1, i1).transpose(-1, -2)
-    if gather_matmul == "custom":
-        QK_hat = gather_inner_bmv(
-            Q.flatten(end_dim=1),
-            K1.transpose(-1, -2).flatten(end_dim=1),
-            i1.view(-1, k1),
-            chunk=512,
-        ).unflatten(0, Q.shape[:2])
+    elif gather_matmul in ("custom", "custom2"):
+        QK_hat = gather_inner_bmv(Q, K1.transpose(-1, -2), i1.squeeze(2), chunk=512)
     s_hat = torch.softmax(QK_hat.div_(scale), dim=-1)
 
     # 2. Gather top k2 positions based on approximate attention scores & run attention
     s_hat_i2, i2 = torch.topk(s_hat, k2, -1)
     iKV = i2[..., 0, :, None]
-    K, V = gather(K2, -2, iKV), gather(V, -2, iKV)
-    y_ = attn(Q, K, V)
+    if gather_matmul in ("torch", "custom"):
+        QK = Q @ gather(K2, -2, iKV).transpose(2, 3)
+    elif gather_matmul == "custom2":
+        QK = gather_outer_bmv(Q, K2.transpose(2, 3), iKV.squeeze(-1), chunk=128)
+    s = torch.softmax(QK.div_(Q.shape[-1] ** 0.5), dim=-1)
+    y_ = s @ gather(V, -2, iKV)
 
     # 3. Estimate the total score of the top k, and interpolate with V_mean
     alpha = s_hat_i2.sum(-1, keepdim=True)

@@ -1,15 +1,35 @@
+from typing import Tuple
+
+import pytest
 import torch
 
+import gather_matmul as G
 from sparq_benchmark import gather
-from gather_matmul import gather_inner_bmv
 
 
-def test_gather_inner_bmv() -> None:
-    torch.manual_seed(42)
-    a = torch.randn(2, 1, 8, device="cuda", dtype=torch.float16)
-    b = torch.randn(2, 8, 10, device="cuda", dtype=torch.float16)
-    i = torch.tensor([[0, 2, 4, 6], [1, 3, 5, 7]], dtype=torch.long, device="cuda")
+@pytest.mark.parametrize("group_shape", [(2,), (3, 2)])
+def test_gather_inner_bmv(group_shape: Tuple[int, ...]) -> None:
+    torch.manual_seed(100)
+    a = torch.randn(*group_shape, 1, 8, device="cuda", dtype=torch.float16)
+    b = torch.randn(*group_shape, 8, 10, device="cuda", dtype=torch.float16)
+    i = torch.randint(0, 8, size=group_shape + (4,), device="cuda")
 
-    expected = gather(a, 2, i[:, None, :]) @ gather(b, 1, i[:, :, None])
-    actual = gather_inner_bmv(a, b, i, chunk=4)
-    torch.testing.assert_close(actual, expected, atol=0, rtol=1e-2)
+    expected = gather(a, -1, i[..., None, :]) @ gather(b, -2, i[..., :, None])
+    actual = G.gather_inner_bmv(a, b, i, chunk=4)
+    assert actual.shape == group_shape + (1, 10)
+    # Note: tolerance is set empirically, may be too tight
+    torch.testing.assert_close(actual, expected, atol=5e-3 * actual.std(), rtol=0)
+
+
+@pytest.mark.parametrize("group_shape", [(2,), (3, 2)])
+def test_gather_outer_bmv(group_shape: Tuple[int, ...]) -> None:
+    torch.manual_seed(200)
+    a = torch.randn(*group_shape, 1, 8, device="cuda", dtype=torch.float16)
+    b = torch.randn(*group_shape, 8, 20, device="cuda", dtype=torch.float16)
+    i = torch.randint(0, 20, size=group_shape + (9,), device="cuda")
+
+    expected = a @ gather(b, -1, i[..., None, :])
+    actual = G.gather_outer_bmv(a, b, i, chunk=4)
+    assert actual.shape == group_shape + (1, 9)
+    # Note: tolerance is set empirically, may be too tight
+    torch.testing.assert_close(actual, expected, atol=5e-3 * actual.std(), rtol=0)
