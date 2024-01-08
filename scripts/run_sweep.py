@@ -3,9 +3,10 @@ import sys
 from pathlib import Path
 from typing import List
 
-import sparq_benchmark as B
 import torch
 import tqdm
+
+import sparq_benchmark as B
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 methods = [dict(method="empty"), dict(method="dense")] + [
