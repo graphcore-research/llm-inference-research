@@ -23,6 +23,6 @@ def test_attn() -> None:
         V_mean=V.mean(-2, keepdim=True),
         k1=4,
         k2=sequence_length,
-        gather_matmul="auto",
+        gather_matmul="torch",
     )
     torch.testing.assert_close(actual, expected)

@@ -5,17 +5,39 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional, Union
 
 import torch
-import tqdm
 from torch import Tensor
 
 import gather_matmul as G
 
-# Methods
+# Utility
 
 
-def attn(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
-    QK = (Q @ K.transpose(2, 3)).div_(Q.shape[-1] ** 0.5)
-    return torch.softmax(QK, dim=-1) @ V
+def benchmark_call(
+    fn: Callable[[], None],
+    reps: int,
+    warmup: int,
+    device: torch.device,
+    pre_fn: Callable[[], None] = lambda: None,
+) -> Tensor:
+    """Benchmark the wall-clock execution time of fn().
+
+    pre_fn -- called each iteration, before starting the timer
+
+    returns -- tensor(reps; float) -- duration of each call in seconds (after warmup)
+    """
+    results = []
+    for n in range(warmup + reps):
+        pre_fn()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        t0 = time.time()
+        fn()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        elapsed = time.time() - t0
+        if warmup <= n:
+            results.append(elapsed)
+    return torch.tensor(results)
 
 
 def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
@@ -24,8 +46,16 @@ def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
 
 
 @torch.compile
-def _scaled_softmax(x: Tensor, divscale: Union[Tensor, float], dim: int) -> Tensor:
+def scaled_softmax(x: Tensor, divscale: Union[Tensor, float], dim: int) -> Tensor:
     return torch.softmax(x / divscale, dim=dim)
+
+
+# Methods
+
+
+def attn(Q: Tensor, K: Tensor, V: Tensor) -> Tensor:
+    QK = (Q @ K.transpose(2, 3)).div_(Q.shape[-1] ** 0.5)
+    return torch.softmax(QK, dim=-1) @ V
 
 
 def sparq_attn(
@@ -36,11 +66,8 @@ def sparq_attn(
     V_mean: Tensor,
     k1: int,
     k2: int,
-    gather_matmul: str,  # "auto|torch|custom"
+    gather_matmul: str,  # "torch|custom"
 ) -> Tensor:
-    if gather_matmul == "auto":
-        gather_matmul = "custom" if Q.device.type == "cuda" else "torch"
-
     # 1. Approximate attention scores using k1 largest components of Q
     absQ = torch.abs(Q)
     absQ_hat, i1 = torch.topk(absQ, k1, -1)
@@ -52,8 +79,9 @@ def sparq_attn(
     if gather_matmul == "torch":
         QK_hat = gather(Q, -1, i1) @ gather(K1, -1, i1).transpose(-1, -2)
     elif gather_matmul == "custom":
+        # Rule for chunk size determined empirically
         QK_hat = G.gather_inner_bmv(Q, K1.transpose(-1, -2), i1.squeeze(2), chunk=512)
-    s_hat = _scaled_softmax(QK_hat, scale, dim=-1)
+    s_hat = scaled_softmax(QK_hat, scale, dim=-1)
 
     # 2. Gather top k2 positions based on approximate attention scores & run attention
     s_hat_i2, i2 = torch.topk(s_hat, k2, -1)
@@ -61,12 +89,21 @@ def sparq_attn(
     if gather_matmul == "torch":
         QK = Q @ gather(K2, -2, iKV).transpose(2, 3)
     elif gather_matmul == "custom":
-        QK = G.gather_outer_bmv(Q, K2.transpose(2, 3), iKV.squeeze(-1), chunk=128)
-    s = _scaled_softmax(QK, Q.shape[-1] ** 0.5, dim=-1)
+        # Rule for chunk size determined empirically
+        QK = G.gather_outer_bmv(
+            Q,
+            K2.transpose(2, 3),
+            iKV.squeeze(-1),
+            chunk=min(k2, 65536 // Q.shape[-1]),
+        )
+    s = scaled_softmax(QK, Q.shape[-1] ** 0.5, dim=-1)
     if gather_matmul == "torch":
         y_ = s @ gather(V, -2, iKV)
     elif gather_matmul == "custom":
-        y_ = G.gather_inner_matrix_only_bmv(s, V, iKV.squeeze(-1), chunk=64)
+        # Rule for chunk size determined empirically
+        y_ = G.gather_inner_matrix_only_bmv(
+            s, V, iKV.squeeze(-1), chunk=min(64, 8192 // k2)
+        )
 
     # 3. Estimate the total score of the top k, and interpolate with V_mean
     return torch.lerp(V_mean, y_, s_hat_i2.sum(-1, keepdim=True))
@@ -78,7 +115,7 @@ def sparq_attn(
 @dataclass
 class Benchmark:
     method: str  # "empty|dense|sparq"
-    kernel: str  # "empty|vanilla|compiled|auto|flash|math|mem_efficient"
+    kernel: str  # "empty|vanilla|compiled|flash|math|mem_efficient"
     # Generic
     batch_size: int
     n_head: int
@@ -88,11 +125,12 @@ class Benchmark:
     device: str  # "cpu|cuda"
     # Benchmark
     reps: int
+    warmup: int
     # Method-specific
     k1: Optional[int] = None
     k2: Optional[int] = None
     store_k_twice: Optional[bool] = None
-    gather_matmul: Optional[str] = None  # "auto|torch|custom"
+    gather_matmul: Optional[str] = None  # "torch|custom"
 
     @property
     def dense_flops(self) -> float:
@@ -116,11 +154,10 @@ class Benchmark:
 @dataclass
 class Results:
     duration: List[float]
-    std: List[float]
+    error: Optional[str]
     device_name: str
     torch_version: str
     revision: str
-    error: Optional[str]
 
 
 def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]:
@@ -147,18 +184,11 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
             return Q
         if b.method == "dense" and b.kernel in ("vanilla", "compiled"):
             return attn_(Q, K, V)
-        if b.method == "dense" and b.kernel in [
-            "auto",
-            "flash",
-            "math",
-            "mem_efficient",
-        ]:
+        if b.method == "dense" and b.kernel in ["flash", "math", "mem_efficient"]:
             with torch.backends.cuda.sdp_kernel(
-                enable_flash=(b.kernel == "auto" or b.kernel == "flash"),
-                enable_math=(b.kernel == "auto" or b.kernel == "math"),
-                enable_mem_efficient=(
-                    b.kernel == "auto" or b.kernel == "mem_efficient"
-                ),
+                enable_flash=(b.kernel == "flash"),
+                enable_math=(b.kernel == "math"),
+                enable_mem_efficient=(b.kernel == "mem_efficient"),
             ):
                 return torch.nn.functional.scaled_dot_product_attention(Q, K, V)
         if b.method == "sparq" and b.kernel in ("vanilla", "compiled"):
@@ -178,7 +208,7 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
     return run
 
 
-def run(b: Benchmark, progress: bool = True) -> Results:
+def run(b: Benchmark) -> Results:
     device = torch.device(b.device)
     dtype = getattr(torch, b.dtype)
     device_name = (
@@ -194,10 +224,9 @@ def run(b: Benchmark, progress: bool = True) -> Results:
         device_name=device_name,
         torch_version=torch.__version__,
         revision=revision,
-        error=None,
         # Stats
         duration=[],
-        std=[],
+        error=None,
     )
     try:
         Q = torch.empty(
@@ -210,16 +239,13 @@ def run(b: Benchmark, progress: bool = True) -> Results:
         )
         V = torch.randn_like(K)
         runner = get_runner(b, K, V)
-        for _ in tqdm.tqdm(list(range(b.reps)), disable=not progress):
-            torch.randn(*Q.shape, out=Q)
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            t0 = time.time()
-            y = runner(Q)
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            results.duration.append(time.time() - t0)
-            results.std.append(float(y.std()))
+        results.duration = benchmark_call(
+            lambda: runner(Q),
+            reps=b.reps,
+            warmup=b.warmup,
+            device=device,
+            pre_fn=lambda: torch.randn(*Q.shape, out=Q),
+        ).tolist()
     except torch.cuda.OutOfMemoryError as error:
         results.error = repr(error)
     return results
