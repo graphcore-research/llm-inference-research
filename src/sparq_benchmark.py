@@ -80,7 +80,7 @@ def sparq_attn(
         QK_hat = gather(Q, -1, i1) @ gather(K1, -1, i1).transpose(-1, -2)
     elif gather_matmul == "custom":
         # Rule for chunk size determined empirically
-        QK_hat = G.gather_inner_bmv(Q, K1.transpose(-1, -2), i1.squeeze(2), chunk=512)
+        QK_hat = G.gather_inner_bmv(Q, K1.transpose(-1, -2), i1.squeeze(2), chunk=256)
     s_hat = scaled_softmax(QK_hat, scale, dim=-1)
 
     # 2. Gather top k2 positions based on approximate attention scores & run attention

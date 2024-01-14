@@ -48,10 +48,10 @@ benchmarks = [
         head_dim=128,
         dtype=dtype,
         device=device,
-        reps=100,
-        warmup=10,
+        reps=200,
+        warmup=20,
     )
-    for sequence_length in [2048, 4096, 8192, 16384]
+    for sequence_length in [2048, 4096, 8192, 16384, 65536]
     for batch_size in [1, 4, 16, 64]
     for dtype in dtypes
     for settings in methods()
