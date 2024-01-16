@@ -1,6 +1,10 @@
+.ninja_deps
+.ninja_log
 __pycache__/
 .venv/
 .vscode/
 
+/build
 /local
 /out
+/third_party/poplar

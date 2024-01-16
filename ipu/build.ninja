@@ -1,0 +1,15 @@
+cpppath = -isystem third_party/poplar/include
+cppflags = -Wall -Wextra -Werror -Wno-unused-function -std=c++17 -O2 -g -fPIC -fdiagnostics-color=always
+linkflags = $cppflags -Wl,--no-undefined
+libs = -lpoplar -lpopops -lpoputil -lpoprand -lpoplin -lpopnn
+
+rule compile
+    command = g++ -MD -MF$out.d $cppflags $cpppath -c $in -o $out
+    deps = gcc
+    depfile = $out.d
+
+rule linkexe
+    command = g++ $linkflags $in -o $out $libs
+
+build build/sparq_benchmark.o: compile ipu/sparq_benchmark.cpp
+build build/sparq_benchmark: linkexe build/sparq_benchmark.o
