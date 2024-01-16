@@ -21,9 +21,9 @@
 
 // Helpers
 
-poplar::Device attach() {
+poplar::Device attach(unsigned count) {
     auto manager = poplar::DeviceManager::createDeviceManager();
-    for (auto&& device : manager.getDevices(poplar::TargetType::IPU, 1)) {
+    for (auto&& device : manager.getDevices(poplar::TargetType::IPU, count)) {
         if (device.attach()) {
             return std::move(device);
         }
@@ -237,9 +237,13 @@ struct Config {
     unsigned sequenceLength;
     poplar::Type dtype;
 
-    // Execution
+    // Technique
     std::string method;
     unsigned chunkSize;
+
+    // Benchmarking
+    unsigned reps;
+    bool showResult;
 
     unsigned headBatchSize() const { return batchSize * nHead; }
 };
@@ -258,7 +262,21 @@ struct Base {
     virtual ~Base() {}
 
     virtual poplar::program::Sequence prepare() = 0;
-    virtual poplar::program::Sequence run() = 0;
+    poplar::program::Sequence run() {
+        poplar::DebugContext di("run");
+        poplar::program::Sequence prog;
+        auto q = util::randn(graph, c.dtype, {c.headBatchSize(), 1, c.headDim}, prog, {di, "q"});
+        poplar::program::Sequence loopBody;
+        auto y = runSingle(q, loopBody, di);
+        prog.add(poplar::program::Repeat(c.reps, loopBody, di));
+        if (c.showResult) {
+            util::print("y", y, prog);
+        }
+        return prog;
+    }
+    virtual poplar::Tensor runSingle(const poplar::Tensor& q,
+                                     poplar::program::Sequence& prog,
+                                     const poplar::DebugContext& di) = 0;
 };
 
 struct AttnLocal : Base {
@@ -285,13 +303,10 @@ struct AttnLocal : Base {
         return prog;
     }
 
-    poplar::program::Sequence run() {
-        poplar::DebugContext di("run");
-        poplar::program::Sequence prog;
-        auto q = util::randn(graph, c.dtype, {c.headBatchSize(), 1, c.headDim}, prog, {di, "q"});
-        auto y = util::attnLocal(graph, q, k, v, prog, di);
-        // util::print("y", y, prog);
-        return prog;
+    poplar::Tensor runSingle(const poplar::Tensor& q,
+                             poplar::program::Sequence& prog,
+                             const poplar::DebugContext& di) {
+        return util::attnLocal(graph, q, k, v, prog, di);
     }
 };
 
@@ -323,13 +338,10 @@ struct AttnRemote : Base {
         return prog;
     }
 
-    poplar::program::Sequence run() {
-        poplar::DebugContext di("run");
-        poplar::program::Sequence prog;
-        auto q = util::randn(graph, c.dtype, {c.headBatchSize(), 1, c.headDim}, prog, {di, "q"});
-        auto y = util::attnRemote(graph, q, bufferK, bufferV, c.chunkSize, prog, di);
-        // util::print("y", y, prog);
-        return prog;
+    poplar::Tensor runSingle(const poplar::Tensor& q,
+                             poplar::program::Sequence& prog,
+                             const poplar::DebugContext& di) {
+        return util::attnRemote(graph, q, bufferK, bufferV, c.chunkSize, prog, di);
     }
 };
 
@@ -348,20 +360,28 @@ Base* get(poplar::Graph&& graph_, const Config& c) {
 }  // namespace benchmark
 
 int main() {
-    auto device = attach();
+    auto device = attach(1);
 
     // Test config
     benchmark::Config config{
+        // Problem
         /*batchSize*/ 2u,
         /*nHead*/ 2u,
         /*headDim*/ 8u,
         /*sequenceLength*/ 10u,
         /*dtype*/ poplar::HALF,
+
+        // Method
         // /*method*/ "attn-local",
-        // /*chunkSize*/ 0u
+        // /*chunkSize*/ 0u.
         /*method*/ "attn-remote",
-        /*chunkSize*/ 5u
+        /*chunkSize*/ 5u,
+
+        // Benchmark
+        /*reps*/ 1u,
+        /*showResult*/ true,
     };
+
     // Full configs
     // benchmark::Config config{/*batchSize*/ 1u,
     //                          /*nHead*/ 32u,
@@ -369,16 +389,21 @@ int main() {
     //                          /*sequenceLength*/ 4096u,
     //                          /*dtype*/ poplar::HALF,
     //                          /*method*/ "attn-local",
-    //                          /*chunkSize*/ 0u};
+    //                          /*chunkSize*/ 0u,
+    //                          /*reps*/ 100u,
+    //                          /*showResult*/ false};
     // benchmark::Config config{/*batchSize*/ 16u,
     //                          /*nHead*/ 32u,
     //                          /*headDim*/ 128u,
     //                          /*sequenceLength*/ 4096u,
     //                          /*dtype*/ poplar::HALF,
     //                          /*method*/ "attn-remote",
-    //                          /*chunkSize*/ 128u};
+    //                          /*chunkSize*/ 128u,
+    //                          /*reps*/ 1u,
+    //                          /*showResult*/ false};
 
-    std::shared_ptr<benchmark::Base> builder(benchmark::get({device}, config));
+    std::shared_ptr<benchmark::Base> builder(benchmark::get(
+        {device, poplar::replication_factor(device.getTarget().getNumIPUs())}, config));
     auto t0 = std::chrono::system_clock::now();
     auto showElapsed = [&t0](const std::string& name) {
         auto t1 = std::chrono::system_clock::now();
