@@ -289,8 +289,10 @@ struct AttnLocal : Base {
         }
         k = graph.addVariable(c.dtype, {c.headBatchSize(), c.sequenceLength, c.headDim},
                               poplar::VariableMappingMethod::LINEAR, "k");
-        v = graph.addVariable(c.dtype, {c.headBatchSize(), c.sequenceLength, c.headDim},
-                              poplar::VariableMappingMethod::LINEAR, "v");
+        v = graph
+                .addVariable(c.dtype, {c.headBatchSize(), c.headDim, c.sequenceLength},
+                             poplar::VariableMappingMethod::LINEAR, "v")
+                .dimShuffle({0, 2, 1});
     }
 
     poplar::program::Sequence prepare() {
@@ -383,7 +385,7 @@ int main() {
     };
 
     // Full configs
-    // benchmark::Config config{/*batchSize*/ 1u,
+    // benchmark::Config config{/*batchSize*/ 4u,
     //                          /*nHead*/ 32u,
     //                          /*headDim*/ 128u,
     //                          /*sequenceLength*/ 4096u,
@@ -412,17 +414,14 @@ int main() {
                   << std::endl;
         t0 = t1;
     };
-    poplar::Engine engine(builder->graph,
-                          {builder->prepare(), builder->run(), poplar::program::Sequence()});
+    poplar::Engine engine(builder->graph, {builder->prepare(), builder->run()});
     showElapsed("compile");
     engine.load(device);
     showElapsed("load");
-    for (auto i = 0u; i < 5u; ++i) {
-        engine.run(2);
-        showElapsed("empty");
-    }
+    engine.disableExecutionProfiling();
     engine.run(0);
     showElapsed("prepare");
+    engine.enableExecutionProfiling();
     for (auto i = 0u; i < 5u; ++i) {
         engine.run(1);
         showElapsed("run");
