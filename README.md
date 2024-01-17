@@ -11,8 +11,8 @@ pip install -r requirements.txt
 ./scripts/check.sh
 
 # IPU Sweep
-ninja -f ipu/build.ninja && ./build/sparq_benchmark
+python scripts/run_sweep_ipu.py
 
 # CPU/GPU Sweep
-python scripts/run_sweep.py
+python scripts/run_sweep_pytorch.py
 ```

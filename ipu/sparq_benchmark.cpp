@@ -5,8 +5,10 @@
 #include <sstream>
 #include <string>
 
+#include <graphcore_target_access/IPUAttributes.h>
 #include <poplar/DeviceManager.hpp>
 #include <poplar/Engine.hpp>
+#include <poplar/OptionFlags.hpp>
 #include <poplin/MatMul.hpp>
 #include <poplin/codelets.hpp>
 #include <popnn/NonLinearity.hpp>
@@ -329,7 +331,7 @@ struct Config {
     poplar::Type dtype;
 
     // Technique
-    std::string method;
+    std::string kernel;
     unsigned chunkSize;
     unsigned k1;
     unsigned k2;
@@ -347,7 +349,7 @@ struct Base {
 
     Base(poplar::Graph&& graph_, const Config& c, const std::string& name)
         : graph(std::move(graph_)), c(c) {
-        assert(name == c.method);
+        assert(name == c.kernel);
         popops::addCodelets(graph);
         poprand::addCodelets(graph);
         poplin::addCodelets(graph);
@@ -412,7 +414,7 @@ struct AttnRemote : Base {
 
     AttnRemote(poplar::Graph&& graph_, const Config& c)
         : Base(std::move(graph_), c, "attn-remote") {
-        if (c.sequenceLength % c.chunkSize != 0) {
+        if (c.chunkSize == 0 || c.sequenceLength % c.chunkSize != 0) {
             throw std::invalid_argument("`sequenceLength` must be a multiple of `chunkSize`");
         }
         K = graph.addRemoteBuffer("K", c.dtype, c.headDim, c.headBatchSize() * c.sequenceLength);
@@ -470,114 +472,139 @@ struct SparQAttn : Base {
 };
 
 Base* get(poplar::Graph&& graph_, const Config& c) {
-    if (c.method == "attn-local") {
+    if (c.kernel == "attn-local") {
         return new AttnLocal(std::move(graph_), c);
     }
-    if (c.method == "attn-remote") {
+    if (c.kernel == "attn-remote") {
         return new AttnRemote(std::move(graph_), c);
     }
-    if (c.method == "sparq-attn") {
+    if (c.kernel == "sparq-attn") {
         return new SparQAttn(std::move(graph_), c);
     }
     std::ostringstream msg;
-    msg << "Unknown Config::method: " << c.method;
+    msg << "Unknown Config::kernel: " << c.kernel;
     throw std::invalid_argument(msg.str());
 }
 
 }  // namespace benchmark
 
-int main() {
-    auto device = attach(1);
+namespace {
 
-    // Test config
-    // benchmark::Config config{
-    //     // Problem
-    //     /*batchSize*/ 2u,
-    //     /*nHead*/ 2u,
-    //     /*headDim*/ 8u,
-    //     /*sequenceLength*/ 10u,
-    //     /*dtype*/ poplar::HALF,
+template <class T>
+T get(const poplar::OptionFlags& options, const std::string& key) {
+    T result;
+    auto it = options.find(key);
+    if (it == options.end()) {
+        std::ostringstream msg;
+        msg << "Couldn't find option key \"" << key << "\"";
+        throw std::invalid_argument(msg.str());
+    }
+    std::istringstream in(it->second);
+    in >> result;
+    if (!in.eof()) {
+        std::ostringstream msg;
+        msg << "Couldn't parse option {\"" << key << "\": \"" << options.at(key) << "\"}";
+        throw std::invalid_argument(msg.str());
+    }
+    return result;
+}
 
-    //     // Methods
-    //     // /*method*/ "attn-local",
-    //     // /*chunkSize*/ 0u,
-    //     // /*k1*/ 0u,
-    //     // /*k2*/ 0u,
+poplar::Type toDtype(const std::string& name) {
+    if (name == "float32") {
+        return poplar::FLOAT;
+    }
+    if (name == "float16") {
+        return poplar::HALF;
+    }
+    throw std::invalid_argument("Couldn't parse dtype, expected \"float32\" or \"float16\"");
+}
 
-    //     // /*method*/ "attn-remote",
-    //     // /*chunkSize*/ 5u,
-    //     // /*k1*/ 0u,
-    //     // /*k2*/ 0u,
+struct Stopwatch {
+    typedef std::chrono::system_clock clock;
+    clock::time_point start;
 
-    //     /*method*/ "sparq-attn",
-    //     /*chunkSize*/ 0u,
-    //     /*k1*/ 2u,
-    //     /*k2*/ 5u,
+    Stopwatch() : start(clock::now()) {}
 
-    //     // Benchmark
-    //     /*reps*/ 1u,
-    //     /*showResult*/ true,
-    // };
+    float lap() {
+        auto current = clock::now();
+        auto elapsed =
+            std::chrono::duration_cast<std::chrono::duration<float>>(current - start).count();
+        start = current;
+        return elapsed;
+    }
+};
 
-    // Full configs
+}  // namespace
 
-    // benchmark::Config config{/*batchSize*/ 4u,
-    //                          /*nHead*/ 32u,
-    //                          /*headDim*/ 128u,
-    //                          /*sequenceLength*/ 4096u,
-    //                          /*dtype*/ poplar::HALF,
-    //                          /*method*/ "attn-local",
-    //                          /*chunkSize*/ 0u,
-    //                          /*k1*/ 0u,
-    //                          /*k2*/ 0u,
-    //                          /*reps*/ 100u,
-    //                          /*showResult*/ false};
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "Usage: ./sparq_benchmark '{\"option\": value}'" << std::endl;
+        return 1;
+    }
+    poplar::OptionFlags opt;
+    {
+        std::istringstream in(argv[1]);
+        poplar::readJSON(in, opt);
+    }
 
-    // benchmark::Config config{/*batchSize*/ 16u,
-    //                          /*nHead*/ 32u,
-    //                          /*headDim*/ 128u,
-    //                          /*sequenceLength*/ 4096u,
-    //                          /*dtype*/ poplar::HALF,
-    //                          /*method*/ "attn-remote",
-    //                          /*chunkSize*/ 128u,
-    //                          /*k1*/ 0u,
-    //                          /*k2*/ 0u,
-    //                          /*reps*/ 1u,
-    //                          /*showResult*/ false};
+    benchmark::Config config{
+        // Problem
+        get<unsigned>(opt, "batch_size"),
+        get<unsigned>(opt, "n_head"),
+        get<unsigned>(opt, "head_dim"),
+        get<unsigned>(opt, "sequence_length"),
+        toDtype(get<std::string>(opt, "dtype")),
 
-    benchmark::Config config{/*batchSize*/ 4u,
-                             /*nHead*/ 32u,
-                             /*headDim*/ 128u,
-                             /*sequenceLength*/ 4096u,
-                             /*dtype*/ poplar::HALF,
-                             /*method*/ "sparq-attn",
-                             /*chunkSize*/ 0u,
-                             /*k1*/ 32u,
-                             /*k2*/ 64u,
-                             /*reps*/ 4u,
-                             /*showResult*/ false};
+        // Method
+        get<std::string>(opt, "kernel"),
+        get<unsigned>(opt, "chunk_size"),
+        get<unsigned>(opt, "k1"),
+        get<unsigned>(opt, "k2"),
 
+        // Benchmark
+        get<unsigned>(opt, "inner_reps"),
+        /*showResult*/ false,
+    };
+    auto device = attach(get<unsigned>(opt, "n_ipu"));
+    unsigned warmup = get<unsigned>(opt, "warmup");
+    unsigned reps = get<unsigned>(opt, "reps");
+
+    Stopwatch stopwatch;
     std::shared_ptr<benchmark::Base> builder(benchmark::get(
         {device, poplar::replication_factor(device.getTarget().getNumIPUs())}, config));
-    auto t0 = std::chrono::system_clock::now();
-    auto showElapsed = [&t0](const std::string& name) {
-        auto t1 = std::chrono::system_clock::now();
-        std::cerr << "[" << name << "] "
-                  << std::chrono::duration_cast<std::chrono::duration<float>>(t1 - t0).count()
-                  << std::endl;
-        t0 = t1;
-    };
+    auto durationConstruct = stopwatch.lap();
+
     poplar::Engine engine(builder->graph, {builder->prepare(), builder->run()});
-    showElapsed("compile");
+    auto durationCompile = stopwatch.lap();
+
     engine.load(device);
-    showElapsed("load");
+    auto durationLoad = stopwatch.lap();
+
     engine.disableExecutionProfiling();
     engine.run(0);
-    showElapsed("prepare");
     engine.enableExecutionProfiling();
-    for (auto i = 0u; i < 5u; ++i) {
+    auto durationPrepare = stopwatch.lap();
+
+    std::vector<float> durations;
+    for (auto i = 0u; i < warmup + reps; ++i) {
         engine.run(1);
-        showElapsed("run");
+        // Record the average time over "inner" reps
+        durations.push_back(stopwatch.lap() / config.reps);
     }
+
+    // Print JSON results manually
+    std::cout << "{"
+              << "\"device_name\":\""
+              << device.getAttribute(IPUAttributes::AttributeId::BoardVariant) << "\""
+              << ",\"device_clock\":" << device.getTarget().getTileClockFrequency()
+              << ",\"duration_construct\":" << durationConstruct  //
+              << ",\"duration_compile\":" << durationCompile      //
+              << ",\"duration_load\":" << durationLoad            //
+              << ",\"duration_prepare\":" << durationPrepare      //
+              << ",\"duration\":[";
+    for (auto i = 0u; i < reps; ++i) {
+        std::cout << (i ? "," : "") << durations.at(warmup + i);
+    }
+    std::cout << "]}";
     return 0;
 }
