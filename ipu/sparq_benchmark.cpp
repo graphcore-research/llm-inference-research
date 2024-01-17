@@ -545,7 +545,7 @@ int main() {
     //                          /*reps*/ 1u,
     //                          /*showResult*/ false};
 
-    benchmark::Config config{/*batchSize*/ 2u,
+    benchmark::Config config{/*batchSize*/ 4u,
                              /*nHead*/ 32u,
                              /*headDim*/ 128u,
                              /*sequenceLength*/ 4096u,
@@ -554,7 +554,7 @@ int main() {
                              /*chunkSize*/ 0u,
                              /*k1*/ 32u,
                              /*k2*/ 64u,
-                             /*reps*/ 1u,
+                             /*reps*/ 4u,
                              /*showResult*/ false};
 
     std::shared_ptr<benchmark::Base> builder(benchmark::get(
