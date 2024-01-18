@@ -574,7 +574,8 @@ int main(int argc, char** argv) {
         {device, poplar::replication_factor(device.getTarget().getNumIPUs())}, config));
     auto durationConstruct = stopwatch.lap();
 
-    poplar::Engine engine(builder->graph, {builder->prepare(), builder->run()});
+    poplar::Engine engine(builder->graph, {builder->prepare(), builder->run()},
+                          {{"target.extendedMemory", "true"}});
     auto durationCompile = stopwatch.lap();
 
     engine.load(device);

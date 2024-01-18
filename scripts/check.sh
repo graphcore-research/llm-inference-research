@@ -1,8 +1,13 @@
 set -e
 set -o xtrace
 
-pytest tests/
+if [ ! -z "${POPLAR_SDK_ENABLED}" ]; then
+    ninja -f ipu/build.ninja
+    python -m pytest ipu/test.py
+fi
 
-black --check src/ scripts/ tests/
+python -m pytest tests/
 
-isort --check src/ scripts/ tests/
+python -m black --check src/ scripts/ tests/
+
+python -m isort --check src/ scripts/ tests/

@@ -7,6 +7,7 @@ import gather_matmul as G
 from sparq_benchmark import gather
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="no GPU")
 @pytest.mark.parametrize("group_shape", [(2,), (3, 2)])
 def test_gather_inner_bmv(group_shape: Tuple[int, ...]) -> None:
     torch.manual_seed(100)
@@ -21,6 +22,7 @@ def test_gather_inner_bmv(group_shape: Tuple[int, ...]) -> None:
     torch.testing.assert_close(actual, expected, atol=5e-3 * actual.std(), rtol=0)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="no GPU")
 @pytest.mark.parametrize("group_shape", [(2,), (3, 2)])
 def test_gather_inner_matrix_only_bmv(group_shape: Tuple[int, ...]) -> None:
     torch.manual_seed(200)
@@ -35,6 +37,7 @@ def test_gather_inner_matrix_only_bmv(group_shape: Tuple[int, ...]) -> None:
     torch.testing.assert_close(actual, expected, atol=5e-3 * actual.std(), rtol=0)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="no GPU")
 @pytest.mark.parametrize("group_shape", [(2,), (3, 2)])
 def test_gather_outer_bmv(group_shape: Tuple[int, ...]) -> None:
     torch.manual_seed(300)

@@ -28,7 +28,7 @@ def run_benchmark(config: Dict[str, Any]) -> Dict[str, Any]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    timeout = 10 * 60  # seconds
+    timeout = (60 if config["kernel"] == "attn-remote" else 10) * 60  # seconds
     try:
         stdout, stderr = p.communicate(timeout=timeout)
         if p.returncode:
