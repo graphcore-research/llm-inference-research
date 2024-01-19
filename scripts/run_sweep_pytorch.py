@@ -14,29 +14,34 @@ dtypes = dict(cpu=["float32"], cuda=["float16"])[device]
 
 def methods() -> Iterable[Dict[str, Any]]:
     yield dict(method="empty", kernel="empty")
+
+    # Dense
     yield dict(method="dense", kernel="vanilla")
     yield dict(method="dense", kernel="compiled")
+    if device == "cpu":
+        yield dict(method="dense", kernel="nn")
+        gather_matmuls = ["torch"]
     if device == "cuda":
         yield dict(method="dense", kernel="flash")
         yield dict(method="dense", kernel="math")
         yield dict(method="dense", kernel="mem_efficient")
+        gather_matmuls = ["torch", "custom"]
+
+    # SparQ
     for store_k_twice in [True, False]:
         for k1 in [16, 32, 64]:
             for k2 in [64, 128, 256, 512]:
-                for gather_matmul in ["torch", "custom"]:
-                    for kernel in (
-                        ["vanilla", "compiled"]
-                        if gather_matmul == "torch"
-                        else ["vanilla"]
-                    ):
-                        yield dict(
-                            method="sparq",
-                            kernel=kernel,
-                            k1=k1,
-                            k2=k2,
-                            store_k_twice=store_k_twice,
-                            gather_matmul=gather_matmul,
-                        )
+                for gather_matmul in gather_matmuls:
+                    for kernel in ["vanilla", "compiled"]:
+                        if not gather_matmul == "custom" and kernel == "compiled":
+                            yield dict(
+                                method="sparq",
+                                kernel=kernel,
+                                k1=k1,
+                                k2=k2,
+                                store_k_twice=store_k_twice,
+                                gather_matmul=gather_matmul,
+                            )
 
 
 benchmarks = [
@@ -60,9 +65,9 @@ benchmarks = [
 
 if __name__ == "__main__":
     print(f"Running {len(benchmarks)} benchmarks", file=sys.stderr)
-    # for b in benchmarks:
-    #     print(b)
-    with Path("sweep.jsonl").open("w") as f:
+    for b in benchmarks:
+        print(b, file=sys.stderr)
+    with Path("sweep_pytorch.jsonl").open("w") as f:
         for benchmark in tqdm.tqdm(benchmarks):
             results = B.run(benchmark)
             f.write(json.dumps(dict(**benchmark.__dict__, **results.__dict__)) + "\n")

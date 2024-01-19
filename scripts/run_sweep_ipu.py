@@ -68,7 +68,7 @@ benchmarks = [
         batch_size=batch_size,
         sequence_length=sequence_length,
         **kernel,
-        inner_reps=1 if kernel["kernel"] == "attn-remote" else (1024 // batch_size),
+        inner_reps=4 if kernel["kernel"] == "attn-remote" else (1024 // batch_size),
         warmup=2,
         reps=10,
     )

@@ -1,7 +1,8 @@
-import os
+import re
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, List, Optional, Union
 
 import torch
@@ -115,7 +116,7 @@ def sparq_attn(
 @dataclass
 class Benchmark:
     method: str  # "empty|dense|sparq"
-    kernel: str  # "empty|vanilla|compiled|flash|math|mem_efficient"
+    kernel: str  # "empty|vanilla|compiled|nn|flash|math|mem_efficient"
     # Generic
     batch_size: int
     n_head: int
@@ -184,6 +185,8 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
             return Q
         if b.method == "dense" and b.kernel in ("vanilla", "compiled"):
             return attn_(Q, K, V)
+        if b.method == "dense" and b.kernel == "nn":
+            return torch.nn.functional.scaled_dot_product_attention(Q, K, V)
         if b.method == "dense" and b.kernel in ["flash", "math", "mem_efficient"]:
             with torch.backends.cuda.sdp_kernel(
                 enable_flash=(b.kernel == "flash"),
@@ -211,11 +214,17 @@ def get_runner(b: Benchmark, K: Tensor, V: Tensor) -> Callable[[Tensor], Tensor]
 def run(b: Benchmark) -> Results:
     device = torch.device(b.device)
     dtype = getattr(torch, b.dtype)
-    device_name = (
-        torch.cuda.get_device_name(device)
-        if device.type == "cuda"
-        else f"cpu-{os.cpu_count()}"
-    )
+    if device.type == "cuda":
+        device_name = torch.cuda.get_device_name(device)
+    else:
+        (cpu_name,) = set(
+            re.findall(
+                r"model name\s*:\s*(.+)$",
+                Path("/proc/cpuinfo").read_text(),
+                re.MULTILINE,
+            )
+        )
+        device_name = f"{cpu_name} ({torch.get_num_threads()} threads)"
     revision = (
         subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().rstrip("\n")
     )
