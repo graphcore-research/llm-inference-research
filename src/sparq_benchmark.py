@@ -46,7 +46,7 @@ def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
     return t.gather(dim, i.expand(*t.shape[:dim], i.shape[dim], *t.shape[dim + 1 :]))
 
 
-@torch.compile
+@torch.compile(disable=not torch.cuda.is_available())
 def scaled_softmax(x: Tensor, divscale: Union[Tensor, float], dim: int) -> Tensor:
     return torch.softmax(x / divscale, dim=dim)
 
