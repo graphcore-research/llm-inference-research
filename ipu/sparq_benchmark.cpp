@@ -574,8 +574,10 @@ int main(int argc, char** argv) {
         {device, poplar::replication_factor(device.getTarget().getNumIPUs())}, config));
     auto durationConstruct = stopwatch.lap();
 
-    poplar::Engine engine(builder->graph, {builder->prepare(), builder->run()},
-                          {{"target.extendedMemory", "true"}, {"target.hostSyncTimeout", "1800"}});
+    poplar::Engine engine(
+        builder->graph, {builder->prepare(), builder->run()},
+        {{"target.extendedMemory", "false"},  // Enabling this causes a performance regression
+         {"target.hostSyncTimeout", "1800"}});
     auto durationCompile = stopwatch.lap();
 
     engine.load(device);
