@@ -513,10 +513,6 @@ class Adapter:
                 position_ids = full_position_ids[:, i:j].to(model.device)
                 attention_mask = full_attention_mask[:, :j].to(model.device)
                 target_ids = full_input_ids[:, j:k]
-                if torch.cuda.is_available() and torch.cuda.device_count() > 1: 
-                    target_ids = target_ids.to(f"cuda:{torch.cuda.device_count()-1}")
-                else:
-                    target_ids = target_ids.to(model.device)
 
                 out = model(
                     input_ids=input_ids,
@@ -528,7 +524,7 @@ class Adapter:
 
                 logits = out.logits[:, -1, :]
                 nll = F.cross_entropy(
-                    logits, target_ids.squeeze(-1), reduction="none"
+                    logits, target_ids.squeeze(-1).to(logits.device), reduction="none"
                 ).cpu()
                 nll.masked_fill_(~full_attention_mask[:, j:k].squeeze(-1).bool(), 0)
                 neg_log_likelihoods.append(nll)
