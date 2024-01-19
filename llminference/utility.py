@@ -167,6 +167,7 @@ def convert_module(
         replacement = replace(original)
         if replacement is not None:
             replacement.to(next(original.parameters()).dtype)
+            replacement.to(next(original.parameters()).device)
             replacement.load_state_dict(original.state_dict(), strict=False)
             return replacement
 

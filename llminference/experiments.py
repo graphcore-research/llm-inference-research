@@ -238,13 +238,14 @@ def run_one(xp: Experiment, progress: bool = True) -> Outcome:
     adapter = eval_adapter.Adapter.from_pretrained(
         xp.model, dtype=getattr(torch, xp.execution.dtype)
     )
-    adapter.model = SparsityMethods.apply(xp.sparsity, adapter.model)
     if xp.execution.pipeline_stages > 1:
         adapter.model = pipelined_models.pipeline_model(
             adapter.model, xp.execution.pipeline_stages
         )
     else:
         adapter.model.to(torch.device(xp.execution.device))
+
+    adapter.model = SparsityMethods.apply(xp.sparsity, adapter.model)
 
     out = {}
     out["parameters"] = sum(p.nelement() for p in adapter.model.parameters())
