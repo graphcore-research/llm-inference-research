@@ -130,8 +130,8 @@ poplar::Tensor gatherGrouped(poplar::Graph& graph,
 
 // Attention
 //   q: (B, 1, D)
-//   k: (B, L, D)
-//   v: (B, L, D)
+//   k: (B, S, D)
+//   v: (B, S, D)
 //   returns: (B, 1, D)
 poplar::Tensor attnLocal(poplar::Graph& graph,
                          const poplar::Tensor& q,
@@ -155,18 +155,17 @@ poplar::Tensor attnLocal(poplar::Graph& graph,
 
 // Attention from remote memory
 //   q: (B, 1, D)
-//   k: (B*L, D)
-//   v: (B*L, D)
+//   k: (S/chunkSize, D*B*chunkSize)   (pre-transposed layout)
+//   v: (S/chunkSize, B*chunkSize*D)
 //   returns: (B, 1, D)
 poplar::Tensor attnRemote(poplar::Graph& graph,
                           const poplar::Tensor& q,
                           const poplar::RemoteBuffer& k,
                           const poplar::RemoteBuffer& v,
-                          unsigned chunkSize,  // chunked on sequence axis
                           poplar::program::Sequence& prog,
                           const poplar::DebugContext& di) {
-    if (q.rank() != 3 || q.dim(1) != 1 || q.dim(2) != k.numElements() ||
-        k.getRepeats() % q.dim(0) != 0 || k.getRepeats() != v.getRepeats()) {
+    if (q.rank() != 3 || q.dim(1) != 1 || k.numElements() % (q.dim(0) * q.dim(2)) != 0 ||
+        k.getRepeats() != v.getRepeats() || k.numElements() != v.numElements()) {
         std::ostringstream msg;
         msg << "Bad shapes to util::attnRemote(): q.shape=" << q.shapeToString() << ", k.shape={"
             << k.getRepeats() << "," << k.numElements() << "}, v.shape={" << v.getRepeats() << ","
@@ -175,34 +174,32 @@ poplar::Tensor attnRemote(poplar::Graph& graph,
     }
 
     auto headBatchSize = q.dim(0);
-    auto sequenceLength = k.getRepeats() / q.dim(0);
+    auto headDim = q.dim(2);
+    auto chunkSize = k.numElements() / (q.dim(0) * q.dim(2));
+    auto sequenceLength = k.getRepeats() * chunkSize;
     auto dtype = q.elementType();
 
     // Chunked QK product
     auto a = graph.addVariable(dtype, {headBatchSize, 1, sequenceLength},
                                poplar::VariableMappingMethod::LINEAR, {di, "a"});
     prog.add(popops::countedLoop(
-        graph, 0u, sequenceLength, chunkSize,
-        [&](const poplar::Tensor& startIndex) {
+        graph, 0u, k.getRepeats(), 1u,
+        [&](const poplar::Tensor& index) {
             poplar::program::Sequence prog;
 
             // Gather
-            auto kChunk = util::gatherGrouped(
-                graph, k,
-                util::arange(graph, startIndex, chunkSize, 1u, prog, {di, "indices"})
-                    .expand({0})
-                    .broadcast(headBatchSize, 0),
-                prog, {di, "gather_k"});
+            auto kChunk = util::gather(graph, k, index, prog, {di, "gather_k"})
+                              .reshape({headBatchSize, headDim, chunkSize});
 
             // Matmul
-            auto qk = poplin::matMulGrouped(graph, q, kChunk.dimShuffle({0, 2, 1}), prog, dtype,
-                                            {di, "qk"});
+            auto qk = poplin::matMulGrouped(graph, q, kChunk, prog, dtype, {di, "qk"});
 
             // Copy
-            poplar::program::Switch copyToA(startIndex.reshape({}), {di, "a[chunk]=qk"});
-            for (auto i = 0u; i < sequenceLength; i += chunkSize) {
-                copyToA.add(i, poplar::program::Copy(qk, a.slice({i, i + chunkSize}, 2u),
-                                                     /*dontOutline*/ false, {di, "chunkCopy"}));
+            poplar::program::Switch copyToA(index.reshape({}), {di, "a[chunk]=qk"});
+            for (auto i = 0u; i < k.getRepeats(); ++i) {
+                copyToA.add(
+                    i, poplar::program::Copy(qk, a.slice({i * chunkSize, (i + 1) * chunkSize}, 2u),
+                                             /*dontOutline*/ false, {di, "chunkCopy"}));
             }
             prog.add(copyToA);
 
@@ -217,26 +214,23 @@ poplar::Tensor attnRemote(poplar::Graph& graph,
     auto y = graph.clone(q);
     popops::fill(graph, y, prog, 0.0f, {di, "y=0"});
     prog.add(popops::countedLoop(
-        graph, 0u, sequenceLength, chunkSize,
-        [&](const poplar::Tensor& startIndex) {
+        graph, 0u, k.getRepeats(), 1u,
+        [&](const poplar::Tensor& index) {
             poplar::program::Sequence prog;
 
             // Copy
             auto aChunk = graph.clone(a.slice({0, chunkSize}, 2u));
-            poplar::program::Switch copyFromA(startIndex.reshape({}), {di, "a[chunk]"});
-            for (auto i = 0u; i < sequenceLength; i += chunkSize) {
-                copyFromA.add(i, poplar::program::Copy(a.slice({i, i + chunkSize}, 2u), aChunk,
-                                                       /*dontOutline*/ false, {di, "chunkCopy"}));
+            poplar::program::Switch copyFromA(index.reshape({}), {di, "a[chunk]"});
+            for (auto i = 0u; i < k.getRepeats(); ++i) {
+                copyFromA.add(i, poplar::program::Copy(
+                                     a.slice({i * chunkSize, (i + 1) * chunkSize}, 2u), aChunk,
+                                     /*dontOutline*/ false, {di, "chunkCopy"}));
             }
             prog.add(copyFromA);
 
             // Gather
-            auto vChunk = util::gatherGrouped(
-                graph, v,
-                util::arange(graph, startIndex, chunkSize, 1u, prog, {di, "indices"})
-                    .expand({0})
-                    .broadcast(headBatchSize, 0),
-                prog, {di, "gather_v"});
+            auto vChunk = util::gather(graph, v, index, prog, {di, "gather_v"})
+                              .reshape({headBatchSize, chunkSize, headDim});
 
             // Matmul
             auto kv = poplin::matMulGrouped(graph, aChunk, vChunk, prog, dtype, {di, "kv"});
@@ -273,8 +267,6 @@ poplar::Tensor sparqAttn(poplar::Graph& graph,
         throw std::invalid_argument(msg.str());
     }
 
-    // auto headBatchSize = Q.dim(0);
-    // auto sequenceLength = K1.numElements();
     auto dtype = Q.elementType();
 
     // Step 1
@@ -417,22 +409,24 @@ struct AttnRemote : Base {
         if (c.chunkSize == 0 || c.sequenceLength % c.chunkSize != 0) {
             throw std::invalid_argument("`sequenceLength` must be a multiple of `chunkSize`");
         }
-        K = graph.addRemoteBuffer("K", c.dtype, c.headDim, c.headBatchSize() * c.sequenceLength);
-        V = graph.addRemoteBuffer("V", c.dtype, c.headDim, c.headBatchSize() * c.sequenceLength);
+        K = graph.addRemoteBuffer("K", c.dtype, c.headDim * c.chunkSize * c.headBatchSize(),
+                                  c.sequenceLength / c.chunkSize);
+        V = graph.addRemoteBuffer("V", c.dtype, c.headDim * c.chunkSize * c.headBatchSize(),
+                                  c.sequenceLength / c.chunkSize);
     }
 
     poplar::program::Sequence prepare() {
         poplar::DebugContext di("prepare");
         poplar::program::Sequence prog;
-        util::randnRemote(graph, K, c.headBatchSize() * c.chunkSize, prog, {di, "K"});
-        util::randnRemote(graph, V, c.headBatchSize() * c.chunkSize, prog, {di, "V"});
+        util::randnRemote(graph, K, 1u, prog, {di, "K"});
+        util::randnRemote(graph, V, 1u, prog, {di, "V"});
         return prog;
     }
 
     poplar::Tensor runSingle(const poplar::Tensor& Q,
                              poplar::program::Sequence& prog,
                              const poplar::DebugContext& di) {
-        return util::attnRemote(graph, Q, K, V, c.chunkSize, prog, di);
+        return util::attnRemote(graph, Q, K, V, prog, di);
     }
 };
 
