@@ -74,6 +74,7 @@ def sparse_softmax_fixed_k(
     apply_after_softmax: bool = True,
     out_weights: Optional[Tensor] = None,
     generation_only: bool = True,
+    kv_group_size: int = 1,
 ) -> Tensor:
     """Applies softmax accross last dimension, keeping top k
     elements of the output.
@@ -90,6 +91,7 @@ def sparse_softmax_fixed_k(
         before choosing top-k.
         generation_only (bool, optional): only apply the sparse softmax when
         x.shape[-2] == 1 (causal generation)
+        kv_group_size (int, optional): number of query heads per kv head (GQA)
 
     Returns:
         Tensor: shape (batch_size, num_heads, q_len, k_len)
@@ -98,6 +100,9 @@ def sparse_softmax_fixed_k(
     assert not (
         add_avg and not apply_after_softmax
     ), "add_avg requires apply_after_softmax"
+    assert (
+        kv_group_size == 1 or apply_after_softmax
+    ), "GQA supported only for when applying top-k after softmax"
     if dtype is not None:
         x = x.to(dtype)
     if out_weights is None:
@@ -106,12 +111,17 @@ def sparse_softmax_fixed_k(
     if k >= x.shape[-1] or (generation_only and x.shape[-2] != 1):
         return _softmax(x, dim=-1)
 
-    mask = topk_mask(x + torch.log(out_weights), k)
-
     if not apply_after_softmax:
+        mask = topk_mask(x + torch.log(out_weights), k)
         return _softmax(x.masked_fill(~mask, torch.finfo(x.dtype).min), dim=-1)
 
     y = _softmax(x, dim=-1)
+    y_grouped = torch.unflatten(y * out_weights, dim=1, sizes=(-1, kv_group_size))
+    mask = (
+        topk_mask(y_grouped.sum(dim=2, keepdim=True), k)
+        .expand_as(y_grouped)
+        .flatten(1, 2)
+    )
     y *= mask
     if add_avg:
         # '1' for tokens that were removed by the topk operation, which can

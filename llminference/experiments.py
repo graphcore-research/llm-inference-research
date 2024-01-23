@@ -19,6 +19,7 @@ import wandb
 from transformers import PreTrainedModel
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
+from transformers.models.mistral.modeling_mistral import MistralForCausalLM
 
 from . import eval_adapter, utility
 from .methods import ann_attention, eviction_attention, sparse_attention
@@ -40,7 +41,9 @@ logger = logging.getLogger(__name__)
 # Configuration
 
 
-TASKS = ["triviaqa", "squad", "cnn_dailymail", "wikitext_bpc", "repetition"]
+TASKS = ("triviaqa", "squad", "cnn_dailymail", "wikitext_bpc", "repetition")
+
+MODELS = (GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM)
 
 
 @dataclass
@@ -125,6 +128,11 @@ class SparsityMethods:
 
     @staticmethod
     def sparse_v(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
+        if isinstance(model, MistralForCausalLM):
+            settings["kv_group_size"] = (
+                model.config["num_attention_heads"]
+                // model.config["num_key_value_heads"]
+            )
         model.generation_context = eval_adapter.patch_for_model(
             "torch.nn.functional.softmax",
             sparse_attention.sparse_softmax_fixed_k,
@@ -143,14 +151,14 @@ class SparsityMethods:
 
     @staticmethod
     def eviction(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
+        assert isinstance(model, MODELS)
         return eviction_attention.convert(
             model, eviction_attention.Settings(**settings)
         )
 
     @staticmethod
     def ann(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
-        assert isinstance(model, (GPTNeoXForCausalLM, LlamaForCausalLM))
+        assert isinstance(model, MODELS)
         return ann_attention.convert(model, ann_attention.Settings(**settings))
 
 

@@ -5,6 +5,7 @@ import torch
 from torch import tensor
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
+from transformers.models.mistral.configuration_mistral import MistralConfig
 
 from llminference import eval_adapter
 from llminference.methods import eviction_attention as ea
@@ -91,6 +92,41 @@ def test_llama_with_eviction() -> None:
     assert output.shape == (13, 1, 128)
     assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
     assert ((weights != 0).sum(-1) == 8 + 1).all(), "sparse attention"
+
+
+@pytest.mark.parametrize("strategy", ["sum_weight", "lru"])
+def test_mistral_with_eviction(strategy: str) -> None:
+    module = ea.MistralAttentionWithEviction(
+        MistralConfig(hidden_size=128, num_attention_heads=16, num_key_value_heads=4),
+        ea.Settings(k=8, local_k=2, strategy=strategy),
+    )
+    # Prefill
+    _, _, past_key_value = module(
+        torch.randn(13, 19, 128),
+        attention_mask=torch.zeros(13, 1, 19, 19),
+        position_ids=torch.arange(19)[None],
+        use_cache=True,
+        output_attentions=True,
+    )
+    # Generation (with eviction)
+    module.eviction.enable(True)
+    output, weights, _ = module(
+        torch.randn(13, 1, 128),
+        attention_mask=torch.zeros(13, 1, 1, 20),
+        position_ids=torch.tensor([19])[None],
+        past_key_value=past_key_value,
+        use_cache=True,
+        output_attentions=True,
+    )
+    assert output.shape == (13, 1, 128)
+    assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
+    assert ((weights != 0).sum(-1) == 8 + 1).all(), "sparse attention"
+
+    # Check that non-zero weights within KV groups match
+    weights_grouped = (weights != 0).unflatten(dim=1, sizes=(4, 4))
+    assert weights_grouped.unique(dim=2).size(dim=2) == 1
+    # But across groups are different
+    assert weights_grouped.unique(dim=1).size(dim=1) == 4
 
 
 def test_convert_gptneox() -> None:

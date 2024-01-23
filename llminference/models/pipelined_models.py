@@ -87,7 +87,9 @@ def pipeline_model(
             return PipelinedLlamaDecoderLayer(model.config)
 
     model = utility.convert_module(model, _replace)
-    num_hidden_layers = cast(int, model.config.num_hidden_layers)
+    num_hidden_layers = cast(
+        int, model.config.num_hidden_layers  # type:ignore[union-attr]
+    )
     partition_len = ((num_hidden_layers - 1) // num_stages) + 1
     gpu_allocation = [i // partition_len for i in range(num_hidden_layers)]
 

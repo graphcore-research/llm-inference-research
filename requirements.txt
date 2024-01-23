@@ -11,7 +11,7 @@ rouge-score
 tqdm
 torch
 torchaudio
-transformers==4.32.1
+transformers==4.34.0
 types-regex
 types-setuptools
 types-tqdm

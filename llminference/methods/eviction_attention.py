@@ -28,9 +28,14 @@ from transformers.models.gpt_neox.modeling_gpt_neox import (
 )
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.llama.modeling_llama import LlamaAttention, LlamaForCausalLM
+from transformers.models.mistral.configuration_mistral import MistralConfig
+from transformers.models.mistral.modeling_mistral import (
+    MistralAttention,
+    MistralForCausalLM,
+)
 
 from .. import utility
-from ..models import llama_attention
+from ..models import llama_attention, mistral_attention
 from . import sparse_attention
 
 
@@ -79,7 +84,7 @@ class LRU:
 class EvictionMask:
     """Maintain a KV cache eviction mask for one attention layer & context.
 
-    Note: `shape` should be `(batch_size, heads, max_k_length)`
+    Note: `shape` should be `(batch_size, kv_heads, max_k_length)`
 
     Use `eviction.mask` to get the boolean mask representing token positions
     that have been evicted ('1' for retained, '0' for evicted KVs).
@@ -106,9 +111,9 @@ class EvictionMask:
     def update(self, attention_weight: Tensor, causal_index: Tensor) -> None:
         """Update the eviction mask, from a step's attention weight matrix.
 
-        attention_weight: shape (batch, head, query, key)
+        attention_weight: shape (batch, kv_head, query, key)
 
-        causal_index: shape (batch, head, key), -1 for masked-out tokens
+        causal_index: shape (batch, kv_head, key), -1 for masked-out tokens
         """
         if self._last_length > attention_weight.shape[-1]:
             raise ValueError(
@@ -153,7 +158,14 @@ class Eviction:
     def get_mask(self, attention_mask: Tensor) -> Tensor:
         if not self.enabled or self.eviction_mask is None:
             return attention_mask
-        eviction_mask = self.eviction_mask.mask[..., None, : attention_mask.shape[-1]]
+
+        num_kv_heads = self.eviction_mask.mask.shape[1]
+        # Copy mask for heads within the same KV group
+        eviction_mask = (
+            self.eviction_mask.mask[..., None, None, : attention_mask.shape[-1]]
+            .expand_as(torch.unflatten(attention_mask, dim=1, sizes=(num_kv_heads, -1)))
+            .flatten(1, 2)
+        )
         if self.debug_masks is not None:
             self.debug_masks.append(eviction_mask.clone())
         # Apply the mask to remove previously evicted values
@@ -179,6 +191,9 @@ class Eviction:
         )
 
 
+Model = Union[GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM]
+
+
 class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
     def __init__(self, config: GPTNeoXConfig, settings: Settings):
         utility.check_transformers_version(type(self))
@@ -195,7 +210,13 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
     ) -> Tuple[Tensor, Tensor]:
         assert attention_mask is not None
         output, weights = super()._attn(
-            query, key, value, self.eviction.get_mask(attention_mask), head_mask
+            query,
+            key,
+            value,
+            self.eviction.get_mask(
+                attention_mask.expand(*query.shape[:-1], key.shape[-2])
+            ),
+            head_mask,
         )
         self.eviction.update(weights, attention_mask)
         return output, weights
@@ -211,21 +232,60 @@ class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
         self, query: Tensor, key: Tensor, value: Tensor, attention_mask: Tensor
     ) -> Tuple[Tensor, Tensor]:
         output, weights = super()._attn(
-            query, key, value, self.eviction.get_mask(attention_mask)
+            query,
+            key,
+            value,
+            self.eviction.get_mask(
+                attention_mask.expand(*query.shape[:-1], key.shape[-2])
+            ),
         )
         self.eviction.update(weights, attention_mask[:, :, -1:, :])
         return output, weights
 
 
+class MistralAttentionWithEviction(mistral_attention.MistralAttention):
+    def __init__(self, config: MistralConfig, settings: Settings):
+        utility.check_transformers_version(type(self))
+        super().__init__(config)
+        self.eviction = Eviction(
+            settings,
+            config.max_position_embeddings,
+        )
+
+    def _attn(
+        self, query: Tensor, key: Tensor, value: Tensor, attention_mask: Tensor
+    ) -> Tuple[Tensor, Tensor]:
+        output, weights = super()._attn(
+            query,
+            key,
+            value,
+            self.eviction.get_mask(
+                attention_mask.expand(*query.shape[:-1], key.shape[-2])
+            ),
+        )
+        self.eviction.update(
+            torch.unflatten(weights, dim=1, sizes=(self.num_key_value_heads, -1)).mean(
+                dim=2
+            ),
+            attention_mask[:, :, -1:, :],
+        )
+        return output, weights
+
+
 @contextmanager
-def generation_context(
-    model: Union[GPTNeoXForCausalLM, LlamaForCausalLM]
-) -> Iterator[Union[GPTNeoXForCausalLM, LlamaForCausalLM]]:
+def generation_context(model: Model) -> Iterator[Model]:
     """(Context manager) enable KV eviction during this scope."""
     attns = [
         m
         for m in model.modules()
-        if isinstance(m, (GPTNeoXAttentionWithEviction, LlamaAttentionWithEviction))
+        if isinstance(
+            m,
+            (
+                GPTNeoXAttentionWithEviction,
+                LlamaAttentionWithEviction,
+                MistralAttentionWithEviction,
+            ),
+        )
     ]
     for m in attns:
         m.eviction.enable(True)
@@ -234,9 +294,7 @@ def generation_context(
         m.eviction.enable(False)
 
 
-def convert(
-    model: Union[GPTNeoXForCausalLM, LlamaForCausalLM], settings: Settings
-) -> Union[GPTNeoXForCausalLM, LlamaForCausalLM]:
+def convert(model: Model, settings: Settings) -> Model:
     """Convert the model to use (simulated) KV cache eviction during generation."""
 
     def _replace(m: nn.Module) -> Optional[nn.Module]:
@@ -244,6 +302,8 @@ def convert(
             return GPTNeoXAttentionWithEviction(model.config, settings)
         if isinstance(m, LlamaAttention):
             return LlamaAttentionWithEviction(model.config, settings)
+        if isinstance(m, MistralAttention):
+            return MistralAttentionWithEviction(model.config, settings)
 
     model = utility.convert_module(model, _replace)
     model.generation_context = generation_context  # type:ignore[assignment]

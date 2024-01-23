@@ -67,7 +67,7 @@ def test_sparse_softmax_fixed_k() -> None:
     x = torch.tensor(
         [[8, 0, 11, 13], [2, 5, 1, 6], [14, 12, 7, 10], [4, 15, 9, 3]],
         dtype=torch.float32,
-    )
+    )[None, :, None, :]
     mask = torch.tensor(
         [
             [True, True, False, False],
@@ -75,9 +75,28 @@ def test_sparse_softmax_fixed_k() -> None:
             [False, False, True, True],
             [True, False, False, True],
         ]
-    )
+    )[None, :, None, :]
     expected = torch.masked_fill(F.softmax(x, dim=-1), mask=mask, value=0.0)
     out = sa.sparse_softmax_fixed_k(x, dim=-1, k=k, generation_only=False)
+    torch.testing.assert_close(out, expected)
+
+
+def test_sparse_softmax_fixed_k_gqa() -> None:
+    k = 2
+    x = torch.tensor(
+        [[10, 10, 0, 0], [0, 1, 1, 98], [99, 1, 0, 0], [0, 10, 10, 0]],
+        dtype=torch.float32,
+    )[None, :, None, :]
+    mask = ~torch.tensor(
+        [
+            [False, True, False, True],
+            [False, True, False, True],
+            [True, True, False, False],
+            [True, True, False, False],
+        ]
+    )[None, :, None, :]
+    expected = torch.masked_fill(F.softmax(x, dim=-1), mask=mask, value=0.0)
+    out = sa.sparse_softmax_fixed_k(x, k=k, apply_after_softmax=True, kv_group_size=2)
     torch.testing.assert_close(out, expected)
 
 
@@ -99,7 +118,7 @@ def test_sparse_softmax_fixed_k_add_avg() -> None:
     s = F.softmax(x, dim=-1)
     avg = (s[0] + s[1] + s[3]) / 3
     expected = torch.tensor([avg, avg, s[2], avg, s[4], 0])
-    out = sa.sparse_softmax_fixed_k(x[None], k, add_avg=True)[0]
+    out = sa.sparse_softmax_fixed_k(x[None, None, None], k, add_avg=True).squeeze()
     torch.testing.assert_close(out, expected)
 
 
@@ -110,7 +129,9 @@ def test_sparse_softmax_fixed_k_out_weights() -> None:
     out_weights = torch.tensor([1.0, 100.0, 1.0, 1.0, 1.0, 1.0])
     s = F.softmax(x, dim=-1)
     expected = torch.tensor([0, s[1], s[2], 0, 0, 0])
-    out = sa.sparse_softmax_fixed_k(x[None], k, out_weights=out_weights)[0]
+    out = sa.sparse_softmax_fixed_k(
+        x[None, None, None], k, out_weights=out_weights
+    ).squeeze()
     torch.testing.assert_close(out, expected)
 
 
