@@ -17,23 +17,26 @@ def methods() -> Iterable[Dict[str, Any]]:
 
     # Dense
     yield dict(method="dense", kernel="vanilla")
-    yield dict(method="dense", kernel="compiled")
     if device == "cpu":
+        # The compiled kernel is generally worse for CPU, so we skip it
         yield dict(method="dense", kernel="nn")
         gather_matmuls = ["torch"]
+        sparq_kernels = ["vanilla"]
     if device == "cuda":
+        yield dict(method="dense", kernel="compiled")
         yield dict(method="dense", kernel="flash")
         yield dict(method="dense", kernel="math")
         yield dict(method="dense", kernel="mem_efficient")
         gather_matmuls = ["torch", "custom"]
+        sparq_kernels = ["vanilla", "compiled"]
 
     # SparQ
     for store_k_twice in [True, False]:
         for k1 in [16, 32, 64]:
             for k2 in [64, 128, 256, 512]:
                 for gather_matmul in gather_matmuls:
-                    for kernel in ["vanilla", "compiled"]:
-                        if not gather_matmul == "custom" and kernel == "compiled":
+                    for kernel in sparq_kernels:
+                        if not (gather_matmul == "custom" and kernel == "compiled"):
                             yield dict(
                                 method="sparq",
                                 kernel=kernel,
@@ -56,7 +59,7 @@ benchmarks = [
         reps=200,
         warmup=20,
     )
-    for sequence_length in [2048, 4096, 8192, 16384, 65536]
+    for sequence_length in [1024, 2048, 4096, 8192, 16384, 65536]
     for batch_size in [1, 4, 16, 64]
     for dtype in dtypes
     for settings in methods()
