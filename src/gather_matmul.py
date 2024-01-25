@@ -25,7 +25,7 @@ def _kernel_gather_inner_bmv(
     I_s1: int,
     gather_A: tl.constexpr,  # bool
 ):
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(axis=0).to(tl.int64)
     i = tl.load(I_ptr + pid * I_s0 + tl.arange(0, k) * I_s1)  # (k)
     a = tl.load(A_ptr + pid * A_s0 + (i if gather_A else tl.arange(0, k)) * A_s2)  # (k)
     for chunk in range(0, tl.cdiv(n, n_chunk)):
@@ -141,7 +141,7 @@ def _kernel_gather_outer_bmv(
     I_s0: int,
     I_s1: int,
 ):
-    pid = tl.program_id(axis=0)
+    pid = tl.program_id(axis=0).to(tl.int64)
     a = tl.load(A_ptr + pid * A_s0 + tl.arange(0, k) * A_s2)  # (k)
     for chunk in range(0, tl.cdiv(n, n_chunk)):
         chunk_idx = chunk * n_chunk + tl.arange(0, n_chunk)
