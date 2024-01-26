@@ -31,6 +31,7 @@ from .tasks import bpc, qa, repetition, summarisation
 CODE_CHANGES: Dict[str, Any] = {
     "ann-local-token-for-free": True,
     "repetition-ignore-leading-space": True,
+    "forced-sample-no-specials": True,
 }
 
 WANDB_PROJECT = "sparse-attention"

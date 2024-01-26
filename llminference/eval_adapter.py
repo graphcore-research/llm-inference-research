@@ -481,7 +481,9 @@ class Adapter:
             )
             prefill_length = prefill_enc["input_ids"].shape[-1]
         with self.tokenizer_override(padding="right", truncation="right"):
-            reference_enc = self.tokenizer(reference, return_tensors="pt", padding=True)
+            reference_enc = self.tokenizer(
+                reference, return_tensors="pt", padding=True, add_special_tokens=False
+            )
             reference_length = reference_enc["input_ids"].shape[-1]
             if reference_length > max_reference_tokens:
                 raise ValueError(
