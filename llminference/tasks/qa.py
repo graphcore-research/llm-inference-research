@@ -166,10 +166,13 @@ class SQuAD:
 
     @classmethod
     def data(
-        cls, shuffle_seed: int = 945237, **preprocess_args: Any
+        cls,
+        shuffle_seed: int = 945237,
+        part: str = "validation",
+        **preprocess_args: Any,
     ) -> datasets.Dataset:
         return map_full_batch(
-            datasets.load_dataset("squad")["validation"],
+            datasets.load_dataset("squad")[part],
             partial(cls.preprocess, **preprocess_args),
         ).shuffle(shuffle_seed)
 

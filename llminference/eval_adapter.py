@@ -108,7 +108,10 @@ class Adapter:
 
     @property
     def max_length(self) -> int:
-        return cast(int, self.model.config.max_position_embeddings)
+        try:
+            return cast(int, self.model.config.max_sequence_length)
+        except AttributeError:
+            return cast(int, self.model.config.max_position_embeddings)
 
     @property
     def max_gen_toks(self) -> int:

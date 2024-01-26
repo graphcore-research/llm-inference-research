@@ -8,6 +8,7 @@ numpy
 pytest
 pytest-cov
 rouge-score
+sentencepiece
 tqdm
 torch
 torchaudio

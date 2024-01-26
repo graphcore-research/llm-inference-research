@@ -17,7 +17,7 @@ See: H20 (https://arxiv.org/abs/2306.14048)
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, Tuple, Union
+from typing import Iterator, List, Optional, Tuple, Union, cast
 
 import torch
 from torch import Tensor, nn
@@ -194,6 +194,13 @@ class Eviction:
 Model = Union[GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM]
 
 
+def get_max_sequence_length(config: LlamaConfig) -> int:
+    try:
+        return cast(int, config.max_sequence_length)
+    except AttributeError:
+        return cast(int, config.max_position_embeddings)
+
+
 class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
     def __init__(self, config: GPTNeoXConfig, settings: Settings):
         utility.check_transformers_version(type(self))
@@ -226,7 +233,7 @@ class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
     def __init__(self, config: LlamaConfig, settings: Settings):
         utility.check_transformers_version(type(self))
         super().__init__(config)
-        self.eviction = Eviction(settings, config.max_position_embeddings)
+        self.eviction = Eviction(settings, get_max_sequence_length(config))
 
     def _attn(
         self, query: Tensor, key: Tensor, value: Tensor, attention_mask: Tensor

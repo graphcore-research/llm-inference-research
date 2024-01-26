@@ -15,7 +15,9 @@ def test_run_one(tmp_path: Path) -> None:
         out = experiments.run_one(
             experiments.Experiment(
                 "test",
-                task=experiments.Task("squad", shots=1, samples=5),
+                task=experiments.Task(
+                    "squad", shots=1, samples=5, confusion_contexts=7
+                ),
                 model="EleutherAI/pythia-70m",
                 sparsity=experiments.Sparsity("sparse_v", k=32),
                 execution=dataclasses.replace(
@@ -42,7 +44,9 @@ def test_run_many(tmp_path: Path) -> None:
         xps = [
             experiments.Experiment(
                 "test",
-                task=experiments.Task("squad", shots=1, samples=5),
+                task=experiments.Task(
+                    "squad", shots=1, samples=5, confusion_contexts=7
+                ),
                 model="EleutherAI/pythia-70m",
                 sparsity=experiments.Sparsity("sparse_v", k=32),
                 execution=dataclasses.replace(

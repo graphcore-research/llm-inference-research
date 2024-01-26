@@ -40,9 +40,14 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 
-
-TASKS = ("triviaqa", "squad", "cnn_dailymail", "wikitext_bpc", "repetition")
-
+TASKS = (
+    "triviaqa",
+    "squad",
+    "squad_train",
+    "cnn_dailymail",
+    "wikitext_bpc",
+    "repetition",
+)
 MODELS = (GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM)
 
 
@@ -51,6 +56,7 @@ class Task:
     name: str  # TASKS
     shots: int
     samples: int
+    confusion_contexts: int
 
 
 @dataclass
@@ -166,12 +172,16 @@ class SparsityMethods:
 def _evaluate(
     task: Task, adapter: eval_adapter.Adapter, batch_size: int, progress: bool
 ) -> Dict[str, Any]:
-    if task.name in ["triviaqa", "squad"]:
-        data = (
-            qa.TriviaQA.data(context="wiki")
-            if task.name == "triviaqa"
-            else qa.SQuAD.data()
-        )
+    if task.name in ["triviaqa", "squad", "squad_train"]:
+        if task.name == "triviaqa":
+            assert task.confusion_contexts == 0
+            data = qa.TriviaQA.data(context="wiki")
+        if task.name == "squad":
+            data = qa.SQuAD.data(confusion_contexts=task.confusion_contexts)
+        if task.name == "squad_train":
+            data = qa.SQuAD.data(
+                part="train", confusion_contexts=task.confusion_contexts
+            )
         examples = [
             qa.add_few_shot_prompt(
                 data[i],
@@ -184,17 +194,17 @@ def _evaluate(
         ]
         evaluate_fn: Any = qa.evaluate
     elif task.name == "cnn_dailymail":
-        assert task.shots == 0
+        assert task.shots == 0 and task.confusion_contexts == 0
         data = summarisation.CnnDailymail.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = summarisation.evaluate
     elif task.name == "wikitext_bpc":
-        assert task.shots == 0
+        assert task.shots == 0 and task.confusion_contexts == 0
         data = bpc.WikiText.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = bpc.evaluate
     elif task.name == "repetition":
-        assert task.shots == 0
+        assert task.shots == 0 and task.confusion_contexts == 0
         data = repetition.Shakespeare.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = repetition.evaluate
