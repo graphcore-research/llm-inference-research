@@ -34,6 +34,7 @@ cpu_gpu = (
                 "data/20240119_sweep_cpu.jsonl",
                 "data/20240111_sweep_a10g.jsonl",
                 "data/20240114_sweep_a100.jsonl",
+                "data/20240125_sweep_a100_sparq64.jsonl",
             ]
         ]
     )
@@ -63,4 +64,4 @@ df = (
 print(f"Rows: {len(df)}")
 print("Columns:", list(df.columns))
 print("Kernels:", sorted(df.kernel.unique()))
-df.to_json("results.json")
+df.to_json("benchmarks.json")
