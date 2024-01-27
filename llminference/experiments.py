@@ -137,8 +137,7 @@ class SparsityMethods:
     def sparse_v(model: PreTrainedModel, **settings: Any) -> PreTrainedModel:
         if isinstance(model, MistralForCausalLM):
             settings["kv_group_size"] = (
-                model.config["num_attention_heads"]
-                // model.config["num_key_value_heads"]
+                model.config.num_attention_heads // model.config.num_key_value_heads
             )
         model.generation_context = eval_adapter.patch_for_model(
             "torch.nn.functional.softmax",
