@@ -23,7 +23,7 @@ def _sparsities() -> Iterable[xp.Sparsity]:
                 rank=rank,
             )
 
-    # Eviction
+    # Eviction + Local
     for k in [128, 192, 256, 384, 512, 768]:
         yield xp.Sparsity("eviction", k=k, local_k=int(0.25 * k), strategy="sum_weight")
         yield xp.Sparsity("local", k=k, initial_k=16)
