@@ -1,3 +1,5 @@
+# Copyright (c) 2024 Graphcore Ltd. All rights reserved.
+
 cpppath = -isystem third_party/poplar/include
 cppflags = -Wall -Wextra -Werror -Wno-unused-function -std=c++17 -O2 -g -fPIC -fdiagnostics-color=always
 linkflags = $cppflags -Wl,--no-undefined
