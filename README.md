@@ -1,3 +1,13 @@
+# SparQ attention
+
+Code to support [SparQ Attention](https://arxiv.org/abs/2312.04985).
+
+ - This tag contains the evaluation framework "LLM inference research" and SparQ implementations, as used for the main experiments (see [main](https://github.com/graphcore-research/llm-inference-research) for the most recent version).
+ - [notebooks/2023-sparse-attention](https://github.com/graphcore-research/llm-inference-research/tree/notebooks/2023-sparse-attention) includes source for the figures and analysis
+ - [benchmarks](https://github.com/graphcore-research/llm-inference-research/tree/benchmarks) implements the microbenchmarks
+
+The following README is the generic description of the evaluation framework.
+
 # LLM inference research
 
 Experimentation framework from Graphcore Research, used to explore the machine learning performance of post-training model adaptation for accelerating LLM inference.
