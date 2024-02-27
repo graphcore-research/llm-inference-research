@@ -11,6 +11,7 @@ from llminference import experiments
 
 def test_run_one(tmp_path: Path) -> None:
     # A basic integration sanity-check
+    settings = dict(k=32, apply_after_softmax=True, reallocate_to_mean=False)
     with um.patch.dict(os.environ, dict(WANDB_DIR=str(tmp_path))):
         out = experiments.run_one(
             experiments.Experiment(
@@ -19,7 +20,7 @@ def test_run_one(tmp_path: Path) -> None:
                     "squad", shots=1, samples=5, confusion_contexts=7
                 ),
                 model="EleutherAI/pythia-70m",
-                sparsity=experiments.Sparsity("sparse_v", k=32),
+                sparsity=experiments.Sparsity(name="sparse_v", **settings),
                 execution=dataclasses.replace(
                     experiments.Execution.auto(), wandb="offline"
                 ),
@@ -27,7 +28,7 @@ def test_run_one(tmp_path: Path) -> None:
         )
         # Non-exhaustive check of the output fields
         assert out["name"] == "test"
-        assert out["sparsity"] == dict(name="sparse_v", k=32)
+        assert out["sparsity"] == dict(name="sparse_v", **settings)
         assert out["model_config"]["hidden_size"] == 512
         assert len(out["results"]) == 5
         assert 0 <= out["match"] <= 1
@@ -48,7 +49,9 @@ def test_run_many(tmp_path: Path) -> None:
                     "squad", shots=1, samples=5, confusion_contexts=7
                 ),
                 model="EleutherAI/pythia-70m",
-                sparsity=experiments.Sparsity("sparse_v", k=32),
+                sparsity=experiments.Sparsity(
+                    "sparse_v", k=32, apply_after_softmax=True, reallocate_to_mean=False
+                ),
                 execution=dataclasses.replace(
                     experiments.Execution.auto(), wandb="offline"
                 ),

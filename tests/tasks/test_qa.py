@@ -99,7 +99,7 @@ def test_evaluate() -> None:
         return [self.tok_encode(q) for q in prompts_batch]
 
     prefill_lengths = [
-        len(adapter.tok_encode(example_ctxs[i] + example_prompts[i]))
+        len(adapter.tok_encode(example_ctxs[i] + "\n" + example_prompts[i]))
         for i in range(len(examples))
     ]
     with um.patch.object(Adapter, "greedy_sample", mock_sample):

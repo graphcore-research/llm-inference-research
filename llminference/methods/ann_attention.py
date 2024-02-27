@@ -313,14 +313,18 @@ class LlamaAttentionWithANN(llama_attention.LlamaAttention):
         utility.check_transformers_version(type(self))
         super().__init__(config)
         self.settings = settings
-        self.ann = AnnAttention(settings, self.num_heads, self.head_dim)
+        self.ann = AnnAttention(settings, self.num_key_value_heads, self.head_dim)
 
     def _attn(
         self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
     ) -> Tuple[Tensor, Tensor]:
         if query.shape[-2] == 1:
             return self.ann(  # type:ignore[no-any-return]
-                query, key, value, logmask.broadcast_to(key.unsqueeze(-3).shape[:-1])
+                query,
+                key,
+                value,
+                # reshape to (batch, n_heads, 1, seq_len)
+                logmask.broadcast_to(*query.shape[:-1], key.shape[-2]),
             )
         return super()._attn(query, key, value, logmask)
 
@@ -330,11 +334,7 @@ class MistralAttentionWithANN(mistral_attention.MistralAttention):
         utility.check_transformers_version(type(self))
         super().__init__(config)
         self.settings = settings
-        self.ann = AnnAttention(
-            settings,
-            self.num_key_value_heads,
-            self.head_dim,
-        )
+        self.ann = AnnAttention(settings, self.num_key_value_heads, self.head_dim)
 
     def _attn(
         self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor

@@ -71,8 +71,8 @@ class Adapter:
         self.tokenizer = tokenizer
         self._batch_size = batch_size
 
-        # Set padding token
-        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # Set padding token (NOTE: eos caused issues with llama + left padding + fp16)
+        self.tokenizer.pad_token = self.tokenizer.bos_token
 
     @classmethod
     def from_pretrained(
@@ -428,6 +428,8 @@ class Adapter:
                     position_ids=position_ids,
                 )
                 logits = out.logits[:, -1, :]
+                if not logits.isfinite().all():
+                    raise ValueError("Output logits are not finite")
                 next_token = logits.argmax(dim=-1, keepdim=True)
                 generated_tokens.append(next_token)
 

@@ -50,6 +50,9 @@ class LlamaAttention(modeling_llama.LlamaAttention):
         _, _, kv_seq_len, _ = key_states.shape
 
         # MODIFIED (moved from forward())...
+        key_states = repeat_kv(key_states, self.num_key_value_groups)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)
+
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
 
         if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
@@ -122,9 +125,6 @@ class LlamaAttention(modeling_llama.LlamaAttention):
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
 
         past_key_value = (key_states, value_states) if use_cache else None
-
-        key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups)
 
         # MODIFIED (call)
         attn_output, attn_weights = self._attn(query_states, key_states, value_states, attention_mask)

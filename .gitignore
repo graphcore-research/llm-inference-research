@@ -13,3 +13,4 @@ slurm-*.out
 /notebooks
 /out
 /third_party/lm-evaluation-harness/
+/wandb

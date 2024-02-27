@@ -301,7 +301,7 @@ def evaluate(
                 match=evaluate_prediction(output, x["answers"]),
                 prefill_length=len(
                     adapter.tok_encode(
-                        (x["context"] if open_book else "\n") + x["prompt"]
+                        (x["context"] + "\n" if open_book else "") + x["prompt"]
                     )
                 ),
             )
