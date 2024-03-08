@@ -45,7 +45,7 @@ class LowRank(nn.Module):
         self.settings = settings
         self.weight = nn.Parameter(torch.empty(n_kv_heads, 1, head_size, settings.rank))
         for i in range(n_kv_heads):  # can't batch this!
-            nn.init.orthogonal_(self.weight[i, 0])  # type:ignore[no-untyped-call]
+            nn.init.orthogonal_(self.weight[i, 0])
 
     def forward(self, query: Tensor, key: Tensor) -> Tensor:
         """Compute approximate score for each (query, key).

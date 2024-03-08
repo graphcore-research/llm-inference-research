@@ -126,7 +126,7 @@ class SparseAttention(nn.Module):
         scores = (
             (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask)
         )
-        weights = self.softmax(scores)
+        weights = self.softmax(scores).to(value.dtype)
         if self.debug_masks is not None:
             self.debug_masks.append(weights != 0)
         output = weights @ value
@@ -151,7 +151,7 @@ def sparse_softmax(
         apply_after_softmax or not reallocate_to_mean
     ), "reallocate_to_mean can only be used with apply_after_softmax"
 
-    weights = torch.softmax(scores, -1, dtype=torch.float32).to(scores.dtype)
+    weights = torch.softmax(scores, dim=-1, dtype=torch.float32).to(scores.dtype)
 
     if k >= scores.shape[-1]:
         return weights
@@ -192,11 +192,16 @@ def local_softmax(
     max_index = index.max(dim=-1, keepdim=True).values
     local_mask = (index < k - initial_k).logical_or_(max_index - initial_k < index)
     if apply_after_softmax:
-        return torch.softmax(scores, dim=-1).mul_(local_mask)
+        return (
+            torch.softmax(scores, dim=-1, dtype=torch.float32)
+            .to(scores.dtype)
+            .mul_(local_mask)
+        )
     return torch.softmax(
         scores.masked_fill(local_mask.logical_not_(), torch.finfo(scores.dtype).min),
         dim=-1,
-    )
+        dtype=torch.float32,
+    ).to(scores.dtype)
 
 
 Model = Union[GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM]
