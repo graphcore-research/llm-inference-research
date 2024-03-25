@@ -247,8 +247,11 @@ class AnnAttention(nn.Module):
         value_mask = (
             logmask[:, :, :1].squeeze(-2).unsqueeze(-1).exp()
         )  # (batch, n_kv_heads, 1, seq, 1)
-        mean_value = ((value * value_mask).sum(-2) / value_mask.sum(-2)).unsqueeze(
-            -2
+        mean_value = (
+            (value * value_mask)
+            .sum(-2, dtype=torch.float32, keepdim=True)
+            .div_(value_mask.sum(-2, dtype=torch.float32, keepdim=True))
+            .to(value.dtype)
         )  # (batch, n_kv_heads, 1, 1, 1)
         kv_weight = torch.tensor(1.0, device=query.device)
         if self.settings.reallocate_to_mean_value:
