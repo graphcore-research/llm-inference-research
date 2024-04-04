@@ -14,24 +14,20 @@ from llminference.methods import eviction_attention as ea
 @pytest.mark.parametrize("strategy", ["sum_weight", "lru"])
 def test_eviction_strategy(strategy: str) -> None:
     eviction = ea.EvictionMask(
-        ea.Settings(k=3, local_k=2, strategy=strategy),
+        ea.Settings(k=2, local_k=1, strategy=strategy),
         (1, 1, 10),
         device=torch.device("cpu"),
     )
     assert eviction.mask.all(), "nothing evicted"
 
     # Step 1
-    eviction.update(
-        tensor([0.1, 0.7, 0.2])[None, None, None],
-        tensor([2, 1, 0])[None, None],
-    )
+    eviction.update_scores(tensor([0.1, 0.7, 0.2])[None, None, None])
+    eviction.update_mask(tensor([2, 1, 0])[None, None])
     assert eviction.mask.all(), "nothing evicted"
 
     # Step 2
-    eviction.update(
-        tensor([0.1, 0.0, 0.0, 0.0, 0.9, 0.0])[None, None, None],
-        tensor([4, 3, 2, 1, 0, -1])[None, None],
-    )
+    eviction.update_scores(tensor([0.1, 0.0, 0.0, 0.0, 0.9, 0.0])[None, None, None])
+    eviction.update_mask(tensor([4, 3, 2, 1, 0, -1])[None, None])
     # Last 2 tokens (excluding m) are local
     # Sum-weight: best (non-local) score is index 1 (0.7)
     # LRU: most recently used (non-local) is index 1 (used in step 1)

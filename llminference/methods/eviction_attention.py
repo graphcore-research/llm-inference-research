@@ -50,11 +50,9 @@ class SumWeight:
     def __init__(self, shape: Tuple[int, ...], device: torch.device):
         self.score = torch.zeros(shape, device=device)
 
-    def update(self, weight: Tensor) -> Tensor:
+    def update(self, weight: Tensor) -> None:
         # Update the score of each KV (summed over Q)
-        key_length = weight.shape[-1]
         self.score[..., : weight.shape[-1]] += weight.sum(-2)
-        return self.score[..., :key_length]
 
 
 class LRU:
@@ -64,7 +62,11 @@ class LRU:
         # Note: range [1, N], so that 'use' at timestep 0 is better than 'never used'
         self._t = 1 + torch.arange(shape[-1], device=device, dtype=torch.float32)
 
-    def update(self, weight: Tensor) -> Tensor:
+    @property
+    def score(self) -> Tensor:
+        return self.last_used
+
+    def update(self, weight: Tensor) -> None:
         _, _, query_length, key_length = weight.shape
 
         # Compute a mask of 'use' for each key (weight >= 1/sequence_length)
@@ -78,7 +80,6 @@ class LRU:
         self.last_used[..., :key_length] = torch.maximum(
             self.last_used[..., :key_length], used.max(dim=-2).values
         )
-        return self.last_used[..., :key_length]
 
 
 class EvictionMask:
@@ -106,37 +107,41 @@ class EvictionMask:
             raise ValueError(f"Unexpected eviction strategy {settings.strategy}")
         self.mask = torch.ones(shape, dtype=torch.bool, device=device)
         self._last_length = 0
-        self._timestamp = 1 + torch.arange(shape[-1])
 
-    def update(self, attention_weight: Tensor, causal_index: Tensor) -> None:
-        """Update the eviction mask, from a step's attention weight matrix.
-
-        attention_weight: shape (batch, kv_head, query, key)
+    def update_mask(self, causal_index: Tensor) -> None:
+        """Update the eviction mask.
 
         causal_index: shape (batch, kv_head, key), -1 for masked-out tokens
         """
-        if self._last_length > attention_weight.shape[-1]:
+        if self._last_length > causal_index.shape[-1]:
             raise ValueError(
                 "An eviction mask is being updated with a shorter context."
                 " Please use `eviction_attention.generation_context` during"
                 " generation to ensure the eviction mask is reset."
             )
-        self._last_length = attention_weight.shape[-1]
-        key_length = attention_weight.shape[-1]
         finfo = torch.finfo(torch.float32)
-
-        # Update the score of each KV (summed over Q)
-        score = self.strategy.update(attention_weight).clone()
+        key_length = causal_index.shape[-1]
 
         # Combine locality and permadeath into score
-        is_local = (0 <= causal_index) & (causal_index < self.settings.local_k)
+        # (note: k+1 as the current token is "for free")
+        score = self.strategy.score[:, :, :key_length].clone()
+        is_local = (0 <= causal_index) & (causal_index < self.settings.local_k + 1)
         score.masked_fill_(is_local, finfo.max)  # local KVs
         score.masked_fill_(~self.mask[..., :key_length], finfo.min)  # dead KVs
 
         # Update the mask
         self.mask[..., :key_length] &= sparse_attention.topk_mask(
-            score, min(key_length, self.settings.k)
+            score, min(key_length, self.settings.k + 1)
         )
+
+    def update_scores(self, attention_weight: Tensor) -> None:
+        """Update eviction scores, from a step's attention weight matrix.
+
+        attention_weight: shape (batch, kv_head, query, key)
+        """
+        # Update the score of each KV (summed over Q)
+        self.strategy.update(attention_weight)
+        self._last_length = attention_weight.shape[-1]
 
 
 class Eviction:
@@ -155,10 +160,19 @@ class Eviction:
         if not self.enabled:
             self.eviction_mask = None
 
-    def get_mask(self, attention_mask: Tensor) -> Tensor:
-        if not self.enabled or self.eviction_mask is None:
+    def update_mask(self, attention_mask: Tensor) -> Tensor:
+        # Disabled or non-causal => no masking
+        if (
+            not self.enabled
+            or self.eviction_mask is None
+            or attention_mask.shape[-2] != 1
+        ):
             return attention_mask
 
+        # Assume attention_mask is the same across heads
+        self.eviction_mask.update_mask(
+            sparse_attention.causal_index(attention_mask[:, :1, 0, :]),
+        )
         num_kv_heads = self.eviction_mask.mask.shape[1]
         # Copy mask for heads within the same KV group
         eviction_mask = (
@@ -185,10 +199,7 @@ class Eviction:
         query_mask = sparse_attention.score_to_mask(
             attention_mask[..., -weights.shape[2] :]
         ).swapdims(-1, -2)
-        self.eviction_mask.update(
-            weights * query_mask,
-            sparse_attention.causal_index(attention_mask[:, :, -1, :]),
-        )
+        self.eviction_mask.update_scores(weights * query_mask)
 
 
 Model = Union[GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM]
@@ -220,7 +231,7 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
             query,
             key,
             value,
-            self.eviction.get_mask(
+            self.eviction.update_mask(
                 attention_mask.expand(*query.shape[:-1], key.shape[-2])
             ),
             head_mask,
@@ -242,7 +253,7 @@ class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
             query,
             key,
             value,
-            self.eviction.get_mask(
+            self.eviction.update_mask(
                 attention_mask.expand(*query.shape[:-1], key.shape[-2])
             ),
         )
@@ -271,7 +282,7 @@ class MistralAttentionWithEviction(mistral_attention.MistralAttention):
             query,
             key,
             value,
-            self.eviction.get_mask(
+            self.eviction.update_mask(
                 attention_mask.expand(*query.shape[:-1], key.shape[-2])
             ),
         )
