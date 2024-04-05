@@ -24,7 +24,7 @@ from transformers.models.mistral.modeling_mistral import MistralForCausalLM
 from . import eval_adapter, utility
 from .methods import ann_attention, eviction_attention, sparse_attention
 from .models import pipelined_models
-from .tasks import bpc, qa, repetition, summarisation
+from .tasks import bpc, needle, qa, repetition, summarisation
 
 # A dictionary of code changes that may affect the numbers, which is always
 # logged alongside experiment results.
@@ -48,6 +48,7 @@ TASKS = (
     "cnn_dailymail",
     "wikitext_bpc",
     "repetition",
+    "needle",
 )
 MODELS = (GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM)
 
@@ -200,6 +201,17 @@ def _evaluate(
         data = repetition.Shakespeare.data()
         examples = [data[i] for i in range(task.samples)]
         evaluate_fn = repetition.evaluate
+    elif task.name == "needle":
+        assert task.shots == 0 and task.confusion_contexts == 0
+        examples = list(
+            needle.Dataset.data(
+                adapter.tokenizer,
+                lengths=needle.get_default_lengths(adapter.max_length),
+                depth_steps=task.samples,
+            )
+        )
+        evaluate_fn = needle.evaluate
+
     else:
         raise ValueError(f"Task {task.name} not found")
 
