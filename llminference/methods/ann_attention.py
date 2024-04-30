@@ -8,6 +8,8 @@ from typing import Any, List, Optional, Tuple, Union, cast
 
 import torch
 from torch import Tensor, nn
+from transformers.models.gemma.configuration_gemma import GemmaConfig
+from transformers.models.gemma.modeling_gemma import GemmaAttention, GemmaForCausalLM
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.gpt_neox.modeling_gpt_neox import (
     GPTNeoXAttention,
@@ -22,7 +24,7 @@ from transformers.models.mistral.modeling_mistral import (
 )
 
 from .. import utility
-from ..models import llama_attention, mistral_attention
+from ..models import gemma_attention, llama_attention, mistral_attention
 from . import sparse_attention
 
 
@@ -277,7 +279,9 @@ class AnnAttention(nn.Module):
         ).flatten(1, 2)
 
 
-Model = Union[GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM]
+Model = Union[
+    GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM, GemmaForCausalLM
+]
 
 
 class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
@@ -312,11 +316,40 @@ class GPTNeoXAttentionWithANN(GPTNeoXAttention):  # type:ignore[misc]
 
 
 class LlamaAttentionWithANN(llama_attention.LlamaAttention):
-    def __init__(self, config: LlamaConfig, settings: Settings):
+    def __init__(
+        self, config: LlamaConfig, layer_idx: Optional[int], settings: Settings
+    ):
         utility.check_transformers_version(type(self))
-        super().__init__(config)
+        super().__init__(config, layer_idx)
         self.settings = settings
         self.ann = AnnAttention(settings, self.num_key_value_heads, self.head_dim)
+
+    def _attn(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        logmask: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        if query.shape[-2] == 1:
+            return self.ann(  # type:ignore[no-any-return]
+                query,
+                key,
+                value,
+                # reshape to (batch, n_heads, 1, seq_len)
+                logmask.broadcast_to(*query.shape[:-1], key.shape[-2]),
+            )
+        return super()._attn(query, key, value, logmask)
+
+
+class GemmaAttentionWithANN(gemma_attention.GemmaAttention):
+    def __init__(
+        self, config: GemmaConfig, layer_idx: Optional[int], settings: Settings
+    ):
+        utility.check_transformers_version(type(self))
+        super().__init__(config, layer_idx)
+        self.settings = settings
+        self.ann = AnnAttention(settings, self.num_heads, self.head_dim)
 
     def _attn(
         self, query: Tensor, key: Tensor, value: Tensor, logmask: Tensor
@@ -333,9 +366,11 @@ class LlamaAttentionWithANN(llama_attention.LlamaAttention):
 
 
 class MistralAttentionWithANN(mistral_attention.MistralAttention):
-    def __init__(self, config: MistralConfig, settings: Settings):
+    def __init__(
+        self, config: MistralConfig, layer_idx: Optional[int], settings: Settings
+    ):
         utility.check_transformers_version(type(self))
-        super().__init__(config)
+        super().__init__(config, layer_idx)
         self.settings = settings
         self.ann = AnnAttention(settings, self.num_key_value_heads, self.head_dim)
 
@@ -360,8 +395,10 @@ def convert(model: Model, settings: Settings) -> Model:
         if isinstance(m, GPTNeoXAttention):
             return GPTNeoXAttentionWithANN(model.config, settings)
         if isinstance(m, LlamaAttention):
-            return LlamaAttentionWithANN(model.config, settings)
+            return LlamaAttentionWithANN(model.config, m.layer_idx, settings)
         if isinstance(m, MistralAttention):
-            return MistralAttentionWithANN(model.config, settings)
+            return MistralAttentionWithANN(model.config, m.layer_idx, settings)
+        if isinstance(m, GemmaAttention):
+            return GemmaAttentionWithANN(model.config, m.layer_idx, settings)
 
     return utility.convert_module(model, _replace)

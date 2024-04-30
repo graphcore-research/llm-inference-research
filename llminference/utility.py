@@ -186,7 +186,7 @@ def convert_module(
     return _convert(model)
 
 
-TRANSFORMERS_VERSION = "4.34.0"
+TRANSFORMERS_VERSION = "4.40.1"
 
 
 def check_transformers_version(type: type) -> None:

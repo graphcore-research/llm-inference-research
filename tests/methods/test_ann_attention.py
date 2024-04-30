@@ -4,6 +4,8 @@ from typing import cast
 
 import pytest
 import torch
+from transformers.cache_utils import DynamicCache
+from transformers.models.gemma.configuration_gemma import GemmaConfig
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.mistral.configuration_mistral import MistralConfig
@@ -124,6 +126,7 @@ def test_gptneox_with_ann() -> None:
 def test_llama_with_ann() -> None:
     module = ann.LlamaAttentionWithANN(
         LlamaConfig(hidden_size=128, num_attention_heads=4, num_key_value_heads=4),
+        0,
         ann.Settings(
             k=8, local_k=2, reallocate_to_mean_value=True, score="sparse_q", rank=12
         ),
@@ -132,7 +135,36 @@ def test_llama_with_ann() -> None:
         torch.randn(13, 1, 128),
         attention_mask=torch.zeros(13, 1, 1, 20),
         position_ids=torch.tensor([19])[None],
-        past_key_value=(torch.randn(13, 4, 19, 32), torch.randn(13, 4, 19, 32)),
+        past_key_value=DynamicCache.from_legacy_cache(
+            ((torch.randn(13, 4, 19, 32), torch.randn(13, 4, 19, 32)),)
+        ),
+        output_attentions=True,
+    )
+    assert output.shape == (13, 1, 128)
+    assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
+    assert ((weights != 0).sum(-1) == 9).all(), "sparse attention"
+
+
+def test_gemma_with_ann() -> None:
+    module = ann.GemmaAttentionWithANN(
+        GemmaConfig(
+            hidden_size=128,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            head_dim=32,
+        ),
+        0,
+        ann.Settings(
+            k=8, local_k=2, reallocate_to_mean_value=True, score="sparse_q", rank=12
+        ),
+    )
+    output, weights, _ = module(
+        torch.randn(13, 1, 128),
+        attention_mask=torch.zeros(13, 1, 1, 20),
+        position_ids=torch.tensor([19])[None],
+        past_key_value=DynamicCache.from_legacy_cache(
+            ((torch.randn(13, 4, 19, 32), torch.randn(13, 4, 19, 32)),)
+        ),
         output_attentions=True,
     )
     assert output.shape == (13, 1, 128)
@@ -144,6 +176,7 @@ def test_llama_with_ann() -> None:
 def test_mistral_with_ann(score: str) -> None:
     module = ann.MistralAttentionWithANN(
         MistralConfig(hidden_size=128, num_attention_heads=16, num_key_value_heads=4),
+        0,
         ann.Settings(
             k=8, local_k=2, reallocate_to_mean_value=True, score=score, rank=4
         ),
@@ -154,7 +187,9 @@ def test_mistral_with_ann(score: str) -> None:
         attention_mask=torch.zeros(13, 1, 1, 20),
         position_ids=torch.tensor([19])[None],
         # KV values should be same within groups
-        past_key_value=(torch.randn(13, 4, 19, 8), torch.randn(13, 4, 19, 8)),
+        past_key_value=DynamicCache.from_legacy_cache(
+            ((torch.randn(13, 4, 19, 8), torch.randn(13, 4, 19, 8)),)
+        ),
         output_attentions=True,
     )
     assert output.shape == (13, 1, 128)

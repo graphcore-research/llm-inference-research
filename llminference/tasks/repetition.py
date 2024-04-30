@@ -50,7 +50,7 @@ def generate_examples(
 class Shakespeare:
     @classmethod
     def data(cls, shuffle_seed: int = 544085, **settings: Any) -> datasets.Dataset:
-        ds = datasets.load_dataset("tiny_shakespeare")
+        ds = datasets.load_dataset("tiny_shakespeare", trust_remote_code=True)
         text = "".join(v["text"][0] for v in ds.values())
         examples = list(generate_examples(text, **settings))
         return datasets.Dataset.from_list(examples).shuffle(shuffle_seed)
@@ -87,9 +87,11 @@ def evaluate(
 ) -> Iterable[AnyDict]:
     for batch in tqdm(
         list(batches(examples, batch_size)),
-        desc=progress
-        if isinstance(progress, str)
-        else f"Evaluating {adapter.model.name_or_path}",
+        desc=(
+            progress
+            if isinstance(progress, str)
+            else f"Evaluating {adapter.model.name_or_path}"
+        ),
         disable=progress is False,
     ):
         contexts = [b["context"] if open_book else "" for b in batch]

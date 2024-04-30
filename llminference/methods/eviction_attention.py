@@ -21,6 +21,9 @@ from typing import Iterator, List, Optional, Tuple, Union, cast
 
 import torch
 from torch import Tensor, nn
+from transformers.configuration_utils import PretrainedConfig
+from transformers.models.gemma.configuration_gemma import GemmaConfig
+from transformers.models.gemma.modeling_gemma import GemmaAttention, GemmaForCausalLM
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.gpt_neox.modeling_gpt_neox import (
     GPTNeoXAttention,
@@ -35,7 +38,7 @@ from transformers.models.mistral.modeling_mistral import (
 )
 
 from .. import utility
-from ..models import llama_attention, mistral_attention
+from ..models import gemma_attention, llama_attention, mistral_attention
 from . import sparse_attention
 
 
@@ -202,10 +205,12 @@ class Eviction:
         self.eviction_mask.update_scores(weights * query_mask)
 
 
-Model = Union[GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM]
+Model = Union[
+    GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM, GemmaForCausalLM
+]
 
 
-def get_max_sequence_length(config: LlamaConfig) -> int:
+def get_max_sequence_length(config: PretrainedConfig) -> int:
     try:
         return cast(int, config.max_sequence_length)
     except AttributeError:
@@ -216,7 +221,7 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
     def __init__(self, config: GPTNeoXConfig, settings: Settings):
         utility.check_transformers_version(type(self))
         super().__init__(config)
-        self.eviction = Eviction(settings, config.max_position_embeddings)
+        self.eviction = Eviction(settings, get_max_sequence_length(config))
 
     def _attn(
         self,
@@ -241,13 +246,19 @@ class GPTNeoXAttentionWithEviction(GPTNeoXAttention):  # type:ignore[misc]
 
 
 class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
-    def __init__(self, config: LlamaConfig, settings: Settings):
+    def __init__(
+        self, config: LlamaConfig, layer_idx: Optional[int], settings: Settings
+    ):
         utility.check_transformers_version(type(self))
-        super().__init__(config)
+        super().__init__(config, layer_idx)
         self.eviction = Eviction(settings, get_max_sequence_length(config))
 
     def _attn(
-        self, query: Tensor, key: Tensor, value: Tensor, attention_mask: Tensor
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        attention_mask: Tensor,
     ) -> Tuple[Tensor, Tensor]:
         output, weights = super()._attn(
             query,
@@ -257,6 +268,40 @@ class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
                 attention_mask.expand(*query.shape[:-1], key.shape[-2])
             ),
         )
+
+        self.eviction.update(
+            torch.unflatten(weights, dim=1, sizes=(self.num_key_value_heads, -1)).mean(
+                dim=2
+            ),
+            attention_mask[:, :, -1:, :],
+        )
+        return output, weights
+
+
+class GemmaAttentionWithEviction(gemma_attention.GemmaAttention):
+    def __init__(
+        self, config: GemmaConfig, layer_idx: Optional[int], settings: Settings
+    ):
+        utility.check_transformers_version(type(self))
+        super().__init__(config, layer_idx)
+        self.eviction = Eviction(settings, get_max_sequence_length(config))
+
+    def _attn(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        attention_mask: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        output, weights = super()._attn(
+            query,
+            key,
+            value,
+            self.eviction.update_mask(
+                attention_mask.expand(*query.shape[:-1], key.shape[-2])
+            ),
+        )
+
         self.eviction.update(
             torch.unflatten(weights, dim=1, sizes=(self.num_key_value_heads, -1)).mean(
                 dim=2
@@ -267,13 +312,12 @@ class LlamaAttentionWithEviction(llama_attention.LlamaAttention):
 
 
 class MistralAttentionWithEviction(mistral_attention.MistralAttention):
-    def __init__(self, config: MistralConfig, settings: Settings):
+    def __init__(
+        self, config: MistralConfig, layer_idx: Optional[int], settings: Settings
+    ):
         utility.check_transformers_version(type(self))
-        super().__init__(config)
-        self.eviction = Eviction(
-            settings,
-            config.max_position_embeddings,
-        )
+        super().__init__(config, layer_idx)
+        self.eviction = Eviction(settings, get_max_sequence_length(config))
 
     def _attn(
         self, query: Tensor, key: Tensor, value: Tensor, attention_mask: Tensor
@@ -307,6 +351,7 @@ def generation_context(model: Model) -> Iterator[Model]:
                 GPTNeoXAttentionWithEviction,
                 LlamaAttentionWithEviction,
                 MistralAttentionWithEviction,
+                GemmaAttentionWithEviction,
             ),
         )
     ]
@@ -324,9 +369,11 @@ def convert(model: Model, settings: Settings) -> Model:
         if isinstance(m, GPTNeoXAttention):
             return GPTNeoXAttentionWithEviction(model.config, settings)
         if isinstance(m, LlamaAttention):
-            return LlamaAttentionWithEviction(model.config, settings)
+            return LlamaAttentionWithEviction(model.config, m.layer_idx, settings)
         if isinstance(m, MistralAttention):
-            return MistralAttentionWithEviction(model.config, settings)
+            return MistralAttentionWithEviction(model.config, m.layer_idx, settings)
+        if isinstance(m, GemmaAttention):
+            return GemmaAttentionWithEviction(model.config, m.layer_idx, settings)
 
     model = utility.convert_module(model, _replace)
     model.generation_context = generation_context  # type:ignore[assignment]

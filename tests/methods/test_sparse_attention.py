@@ -2,6 +2,8 @@
 
 import torch
 import torch.nn.functional as F
+from transformers.cache_utils import DynamicCache
+from transformers.models.gemma.configuration_gemma import GemmaConfig
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.mistral.configuration_mistral import MistralConfig
@@ -231,13 +233,41 @@ def test_gptneox_with_sa() -> None:
 def test_llama_with_sa() -> None:
     module = sa.LlamaSparseAttention(
         LlamaConfig(hidden_size=128, num_attention_heads=4, num_key_value_heads=4),
+        0,
         sa.SparseSettings(k=8, apply_after_softmax=True, reallocate_to_mean=False),
     )
     output, weights, _ = module(
         torch.randn(13, 1, 128),
         attention_mask=torch.zeros(13, 1, 1, 20),
         position_ids=torch.tensor([19])[None],
-        past_key_value=(torch.randn(13, 4, 19, 32), torch.randn(13, 4, 19, 32)),
+        past_key_value=DynamicCache.from_legacy_cache(
+            ((torch.randn(13, 4, 19, 32), torch.randn(13, 4, 19, 32)),)
+        ),
+        output_attentions=True,
+    )
+    assert output.shape == (13, 1, 128)
+    assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
+    assert ((weights != 0).sum(-1) == 8).all(), "sparse attention"
+
+
+def test_gemma_with_sa() -> None:
+    module = sa.GemmaSparseAttention(
+        GemmaConfig(
+            hidden_size=128,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            head_dim=32,
+        ),
+        0,
+        sa.SparseSettings(k=8, apply_after_softmax=True, reallocate_to_mean=False),
+    )
+    output, weights, _ = module(
+        torch.randn(13, 1, 128),
+        attention_mask=torch.zeros(13, 1, 1, 20),
+        position_ids=torch.tensor([19])[None],
+        past_key_value=DynamicCache.from_legacy_cache(
+            ((torch.randn(13, 4, 19, 32), torch.randn(13, 4, 19, 32)),)
+        ),
         output_attentions=True,
     )
     assert output.shape == (13, 1, 128)
@@ -248,13 +278,16 @@ def test_llama_with_sa() -> None:
 def test_mistral_with_sa() -> None:
     module = sa.MistralSparseAttention(
         MistralConfig(hidden_size=128, num_attention_heads=16, num_key_value_heads=4),
+        0,
         sa.SparseSettings(k=8, apply_after_softmax=True, reallocate_to_mean=False),
     )
     output, weights, _ = module(
         torch.randn(13, 1, 128),
         attention_mask=torch.zeros(13, 1, 1, 20),
         position_ids=torch.tensor([19])[None],
-        past_key_value=(torch.randn(13, 4, 19, 8), torch.randn(13, 4, 19, 8)),
+        past_key_value=DynamicCache.from_legacy_cache(
+            ((torch.randn(13, 4, 19, 8), torch.randn(13, 4, 19, 8)),)
+        ),
         output_attentions=True,
     )
     assert output.shape == (13, 1, 128)

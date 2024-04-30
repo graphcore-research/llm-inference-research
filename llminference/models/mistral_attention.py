@@ -1,7 +1,7 @@
 # Copyright 2023 Mistral AI and the HuggingFace Inc. team. All rights reserved.
-# Copyright (c) 2023 Graphcore Ltd. All rights reserved.
+# Copyright (c) 2024 Graphcore Ltd. All rights reserved.
 #
-# Copied from transformers==4.34.0, `transformers.models.mistral.modeling_mistral`
+# Copied from transformers==4.40.1, `transformers.models.mistral.modeling_mistral`
 # Modified by Graphcore
 
 """Light modification of MistralAttention to enable plug-in attention sparsity.
@@ -13,10 +13,12 @@ Modifications are marked with "# MODIFIED"
 # fmt: off
 
 import math
+import warnings
 from typing import Optional, Tuple
 
 import torch
 from torch import Tensor, nn
+from transformers.cache_utils import Cache
 from transformers.models.mistral import modeling_mistral
 from transformers.models.mistral.modeling_mistral import apply_rotary_pos_emb, repeat_kv
 
@@ -37,6 +39,7 @@ class MistralAttention(modeling_mistral.MistralAttention):
         # MODIFIED (copied from forward())
 
         # repeat k/v heads if n_kv_heads < n_heads
+        # NOTE: KV repetition should be inside _attn() for GQA to behave as intended
         key_states = repeat_kv(key_states, self.num_key_value_groups)
         value_states = repeat_kv(value_states, self.num_key_value_groups)
 
@@ -59,6 +62,7 @@ class MistralAttention(modeling_mistral.MistralAttention):
 
         # upcast attention to fp32
         attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
         attn_output = torch.matmul(attn_weights, value_states)
 
         return attn_output, attn_weights
@@ -68,11 +72,15 @@ class MistralAttention(modeling_mistral.MistralAttention):
         hidden_states: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
+        past_key_value: Optional[Cache] = None,
         output_attentions: bool = False,
         use_cache: bool = False,
-        padding_mask: Optional[torch.Tensor] = None,
+        **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        if "padding_mask" in kwargs:
+            warnings.warn(
+                "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"
+            )
         bsz, q_len, _ = hidden_states.size()
 
         query_states = self.q_proj(hidden_states)
@@ -85,16 +93,19 @@ class MistralAttention(modeling_mistral.MistralAttention):
 
         kv_seq_len = key_states.shape[-2]
         if past_key_value is not None:
-            kv_seq_len += past_key_value[0].shape[-2]
+            if self.layer_idx is None:
+                raise ValueError(
+                    f"The cache structure has changed since version v4.36. If you are using {self.__class__.__name__} "
+                    "for auto-regressive decoding with k/v caching, please make sure to initialize the attention class "
+                    "with a layer index."
+                )
+            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
         cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
         query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
 
         if past_key_value is not None:
-            # reuse k, v, self_attention
-            key_states = torch.cat([past_key_value[0], key_states], dim=2)
-            value_states = torch.cat([past_key_value[1], value_states], dim=2)
-
-        past_key_value = (key_states, value_states) if use_cache else None
+            cache_kwargs = {"sin": sin, "cos": cos}  # Specific to RoPE models
+            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         # MODIFIED (call)
         attn_output, attn_weights = self._attn(query_states, key_states, value_states, attention_mask)

@@ -12,7 +12,7 @@ sentencepiece
 tqdm
 torch
 torchaudio
-transformers==4.34.0
+transformers==4.40.1
 types-regex
 types-setuptools
 types-tqdm

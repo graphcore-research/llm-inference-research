@@ -72,7 +72,9 @@ class WikiText:
     ) -> datasets.Dataset:
         return utility.map_and_filter(
             datasets.load_dataset(
-                "EleutherAI/wikitext_document_level", "wikitext-103-raw-v1"
+                "EleutherAI/wikitext_document_level",
+                "wikitext-103-raw-v1",
+                trust_remote_code=True,
             )["train"],
             partial(
                 cls.preprocess, prefill_len=prefill_len, reference_len=reference_len

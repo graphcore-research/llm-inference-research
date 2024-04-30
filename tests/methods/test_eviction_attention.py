@@ -3,6 +3,8 @@
 import pytest
 import torch
 from torch import tensor
+from transformers.cache_utils import DynamicCache
+from transformers.models.gemma.configuration_gemma import GemmaConfig
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.llama.configuration_llama import LlamaConfig
 from transformers.models.mistral.configuration_mistral import MistralConfig
@@ -65,6 +67,7 @@ def test_gptneox_with_eviction() -> None:
 def test_llama_with_eviction() -> None:
     module = ea.LlamaAttentionWithEviction(
         LlamaConfig(hidden_size=128, num_attention_heads=4, num_key_value_heads=4),
+        0,
         ea.Settings(k=8, local_k=2, strategy="lru"),
     )
     # Prefill
@@ -72,6 +75,43 @@ def test_llama_with_eviction() -> None:
         torch.randn(13, 19, 128),
         attention_mask=torch.zeros(13, 1, 19, 19),
         position_ids=torch.arange(19)[None],
+        # Need to pass empty DynamicCache object, otherwise past_key_value is None
+        past_key_value=DynamicCache(),
+        use_cache=True,
+        output_attentions=True,
+    )
+    # Generation (with eviction)
+    module.eviction.enable(True)
+    output, weights, _ = module(
+        torch.randn(13, 1, 128),
+        attention_mask=torch.zeros(13, 1, 1, 20),
+        position_ids=torch.tensor([19])[None],
+        past_key_value=past_key_value,
+        use_cache=True,
+        output_attentions=True,
+    )
+    assert output.shape == (13, 1, 128)
+    assert ((-1e3 <= output) & (output <= 1e3)).all(), "'reasonable' outputs"
+    assert ((weights != 0).sum(-1) == 8 + 1).all(), "sparse attention"
+
+
+def test_gemma_with_eviction() -> None:
+    module = ea.GemmaAttentionWithEviction(
+        GemmaConfig(
+            hidden_size=128,
+            num_attention_heads=4,
+            num_key_value_heads=4,
+            head_dim=32,
+        ),
+        0,
+        ea.Settings(k=8, local_k=2, strategy="lru"),
+    )
+    # Prefill
+    _, _, past_key_value = module(
+        torch.randn(13, 19, 128),
+        attention_mask=torch.zeros(13, 1, 19, 19),
+        position_ids=torch.arange(19)[None],
+        past_key_value=DynamicCache(),
         use_cache=True,
         output_attentions=True,
     )
@@ -94,6 +134,7 @@ def test_llama_with_eviction() -> None:
 def test_mistral_with_eviction(strategy: str) -> None:
     module = ea.MistralAttentionWithEviction(
         MistralConfig(hidden_size=128, num_attention_heads=16, num_key_value_heads=4),
+        0,
         ea.Settings(k=8, local_k=2, strategy=strategy),
     )
     # Prefill
@@ -101,6 +142,7 @@ def test_mistral_with_eviction(strategy: str) -> None:
         torch.randn(13, 19, 128),
         attention_mask=torch.zeros(13, 1, 19, 19),
         position_ids=torch.arange(19)[None],
+        past_key_value=DynamicCache(),
         use_cache=True,
         output_attentions=True,
     )

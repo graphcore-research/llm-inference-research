@@ -17,6 +17,7 @@ import torch
 import tqdm
 import wandb
 from transformers import PreTrainedModel
+from transformers.models.gemma.modeling_gemma import GemmaForCausalLM
 from transformers.models.gpt_neox.modeling_gpt_neox import GPTNeoXForCausalLM
 from transformers.models.llama.modeling_llama import LlamaForCausalLM
 from transformers.models.mistral.modeling_mistral import MistralForCausalLM
@@ -50,7 +51,7 @@ TASKS = (
     "repetition",
     "needle",
 )
-MODELS = (GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM)
+MODELS = (GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM, GemmaForCausalLM)
 
 
 @dataclass

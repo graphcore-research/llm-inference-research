@@ -14,6 +14,8 @@ from typing import List, Optional, Tuple, Union
 
 import torch
 from torch import Tensor, nn
+from transformers.models.gemma.configuration_gemma import GemmaConfig
+from transformers.models.gemma.modeling_gemma import GemmaAttention, GemmaForCausalLM
 from transformers.models.gpt_neox.configuration_gpt_neox import GPTNeoXConfig
 from transformers.models.gpt_neox.modeling_gpt_neox import (
     GPTNeoXAttention,
@@ -28,7 +30,7 @@ from transformers.models.mistral.modeling_mistral import (
 )
 
 from .. import utility
-from ..models import llama_attention, mistral_attention
+from ..models import gemma_attention, llama_attention, mistral_attention
 
 
 def topk_mask(x: Tensor, k: int, dim: int = -1) -> Tensor:
@@ -204,7 +206,9 @@ def local_softmax(
     ).to(scores.dtype)
 
 
-Model = Union[GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM]
+Model = Union[
+    GPTNeoXForCausalLM, LlamaForCausalLM, MistralForCausalLM, GemmaForCausalLM
+]
 
 
 class GPTNeoXSparseAttention(GPTNeoXAttention):  # type:ignore[misc]
@@ -238,17 +242,15 @@ class GPTNeoXSparseAttention(GPTNeoXAttention):  # type:ignore[misc]
 
 
 class LlamaSparseAttention(llama_attention.LlamaAttention):
-    def __init__(self, config: LlamaConfig, settings: Settings):
+    def __init__(
+        self, config: LlamaConfig, layer_idx: Optional[int], settings: Settings
+    ):
         utility.check_transformers_version(type(self))
-        super().__init__(config)
+        super().__init__(config, layer_idx)
         self.sparse_attention = SparseAttention(settings)
 
     def _attn(
-        self,
-        query: Tensor,
-        key: Tensor,
-        value: Tensor,
-        attention_mask: Tensor,
+        self, query: Tensor, key: Tensor, value: Tensor, attention_mask: Tensor
     ) -> Tuple[Tensor, Tensor]:
         # Only enable sparse attention during autoregressive generation
         if query.shape[-2] == 1:
@@ -263,9 +265,11 @@ class LlamaSparseAttention(llama_attention.LlamaAttention):
 
 
 class MistralSparseAttention(mistral_attention.MistralAttention):
-    def __init__(self, config: MistralConfig, settings: Settings):
+    def __init__(
+        self, config: MistralConfig, layer_idx: Optional[int], settings: Settings
+    ):
         utility.check_transformers_version(type(self))
-        super().__init__(config)
+        super().__init__(config, layer_idx)
         self.sparse_attention = SparseAttention(settings)
 
     def _attn(
@@ -287,6 +291,32 @@ class MistralSparseAttention(mistral_attention.MistralAttention):
         return super()._attn(query, key, value, attention_mask)
 
 
+class GemmaSparseAttention(gemma_attention.GemmaAttention):
+    def __init__(
+        self, config: GemmaConfig, layer_idx: Optional[int], settings: Settings
+    ):
+        utility.check_transformers_version(type(self))
+        super().__init__(config, layer_idx)
+        self.sparse_attention = SparseAttention(settings)
+
+    def _attn(
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        attention_mask: Tensor,
+    ) -> Tuple[Tensor, Tensor]:
+        # Only enable sparse attention during autoregressive generation
+        if query.shape[-2] == 1:
+            return self.sparse_attention(  # type:ignore[no-any-return]
+                query,
+                key,
+                value,
+                attention_mask.expand(*query.shape[:-1], key.shape[-2]),
+            )
+        return super()._attn(query, key, value, attention_mask)
+
+
 def convert(model: Model, settings: Settings) -> Model:
     """Convert the model to use Sparse Attention during generation."""
 
@@ -294,8 +324,10 @@ def convert(model: Model, settings: Settings) -> Model:
         if isinstance(m, GPTNeoXAttention):
             return GPTNeoXSparseAttention(model.config, settings)
         if isinstance(m, LlamaAttention):
-            return LlamaSparseAttention(model.config, settings)
+            return LlamaSparseAttention(model.config, m.layer_idx, settings)
         if isinstance(m, MistralAttention):
-            return MistralSparseAttention(model.config, settings)
+            return MistralSparseAttention(model.config, m.layer_idx, settings)
+        if isinstance(m, GemmaAttention):
+            return GemmaSparseAttention(model.config, m.layer_idx, settings)
 
     return utility.convert_module(model, _replace)
