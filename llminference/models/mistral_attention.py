@@ -77,6 +77,9 @@ class MistralAttention(modeling_mistral.MistralAttention):
         use_cache: bool = False,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        # MODIFIED - added
+        assert attention_mask is not None, "attention_mask cannot be None when using sparse methods"
+
         if "padding_mask" in kwargs:
             warnings.warn(
                 "Passing `padding_mask` is deprecated and will be removed in v4.37. Please make sure use `attention_mask` instead.`"

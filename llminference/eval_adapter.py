@@ -79,11 +79,14 @@ class Adapter:
         cls,
         pretrained_model_name_or_path: str,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        attn_implementation: str = "eager",
         dtype: Optional[torch.dtype] = None,
     ) -> "Adapter":
         return cls.from_model(
             transformers.AutoModelForCausalLM.from_pretrained(
-                pretrained_model_name_or_path, torch_dtype=dtype
+                pretrained_model_name_or_path,
+                attn_implementation=attn_implementation,
+                torch_dtype=dtype,
             ),
             batch_size=batch_size,
         )

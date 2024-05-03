@@ -75,6 +75,9 @@ class LlamaAttention(modeling_llama.LlamaAttention):
         cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
+        # MODIFIED - added
+        assert attention_mask is not None, "attention_mask cannot be None when using sparse methods"
+
         bsz, q_len, _ = hidden_states.size()
 
         if self.config.pretraining_tp > 1:
