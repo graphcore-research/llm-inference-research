@@ -34,6 +34,7 @@ CODE_CHANGES: Dict[str, Any] = {
     "repetition-ignore-leading-space": True,
     "forced-sample-no-specials": True,
     "attn-implementation-eager": True,
+    "attn-scale-queries-before-matmul": True,
 }
 
 WANDB_PROJECT = "sparse-attention"
@@ -87,12 +88,11 @@ class Execution:
     @classmethod
     def auto(cls, batch_size: Optional[int] = None) -> "Execution":
         device = "cuda" if torch.cuda.is_available() else "cpu"
-        pipeline_stages = torch.cuda.device_count() if device == "cuda" else 1
         return cls(
             device=device,
             dtype=dict(cpu="float32", cuda="float16")[device],
             batch_size=batch_size or dict(cpu=10, cuda=5)[device],
-            pipeline_stages=pipeline_stages,
+            pipeline_stages=1,
             wandb=True,
         )
 

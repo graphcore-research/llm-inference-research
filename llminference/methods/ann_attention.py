@@ -58,10 +58,12 @@ class LowRank(nn.Module):
 
         returns -- (batch, n_kv_heads, n_heads_per_kv, query, key)
         """
-        head_size = query.shape[-1]
         query_proj = query.to(self.weight.dtype) @ self.weight
         key_proj = key.to(self.weight.dtype) @ self.weight
-        return cast(Tensor, query_proj @ key_proj.transpose(-1, -2) * head_size**-0.5)
+        return cast(
+            Tensor,
+            (query_proj.div(query.shape[-1] ** 0.5) @ key_proj.transpose(-1, -2)),
+        )
 
 
 class SparseQ(nn.Module):
@@ -109,7 +111,7 @@ class SparseQ(nn.Module):
             .pow_(0.5)
             .unsqueeze(-1)
         )
-        return (query_proj @ key_proj.transpose(-1, -2)).div_(scale)
+        return query_proj.div(scale) @ key_proj.transpose(-1, -2)
 
 
 ScoreSettings = Union[LowRank.Settings, SparseQ.Settings]
@@ -186,8 +188,8 @@ class AnnAttention(nn.Module):
 
         mean_value -- (batch, n_kv_heads, n_heads_per_kv, n_query, head_size)
         """
-        scores = (
-            (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask)
+        scores = (query.div(query.shape[-1] ** 0.5) @ key.transpose(-1, -2)).add_(
+            logmask
         )
         weights = torch.softmax(scores, -1, dtype=torch.float32).to(value.dtype)
         # Value-mixing with reallocation
