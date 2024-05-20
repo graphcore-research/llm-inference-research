@@ -125,8 +125,8 @@ class SparseAttention(nn.Module):
             [query, key, value, logmask],
         )
 
-        scores = (
-            (query @ key.transpose(-1, -2)).div_(query.shape[-1] ** 0.5).add_(logmask)
+        scores = (query.div(query.shape[-1] ** 0.5) @ key.transpose(-1, -2)).add_(
+            logmask
         )
         weights = self.softmax(scores).to(value.dtype)
         if self.debug_masks is not None:

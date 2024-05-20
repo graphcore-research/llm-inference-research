@@ -34,6 +34,7 @@ CODE_CHANGES: Dict[str, Any] = {
     "repetition-ignore-leading-space": True,
     "forced-sample-no-specials": True,
     "attn-implementation-eager": True,
+    "attn-scale-queries-before-matmul": True,
 }
 
 WANDB_PROJECT = "sparse-attention"
