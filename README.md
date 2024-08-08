@@ -21,7 +21,7 @@ pip install wheel
 pip install -r requirements.txt
 
 # Optional - notebooks
-git clone git@github.com:PRODUCT-AI-ENGINEERING-GCAI/research-llm-inference.git --branch notebooks notebooks/
+git clone git@github.com:graphcore-research/llm-inference-research.git  --branch notebooks notebooks/
 ```
 
 ## Development
