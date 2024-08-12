@@ -34,6 +34,66 @@ def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
     return t.gather(dim, i.expand(*t.shape[:dim], i.shape[dim], *t.shape[dim + 1 :]))
 
 
+def bucket_topk(
+    x: torch.Tensor, k: int, dim: int, n_buckets: int, interleaved: bool
+) -> Tuple[Tensor, Tensor]:
+    if n_buckets == 1:
+        topk_out = torch.topk(x, k, dim)
+        return topk_out.values, topk_out.indices
+
+    # assert x.size(0) == 1, "Batch size > 1 might not work due to padding"
+    assert k % n_buckets == 0, "k should be divisible by the number of buckets"
+    assert dim == -1, "Some parts don't work otherwise"
+
+    dim += (dim < 0) * x.ndim
+
+    k_per_bucket = k // n_buckets
+
+    n_excess_els = x.size(dim) % n_buckets
+
+    # Pad the sequence at the end so it is divisible by n_buckets
+    if n_excess_els != 0:
+        pad = [0 for _ in range(x.ndim * 2)]
+        pad[dim * 2] = n_buckets - x.size(dim) % n_buckets
+        pad.reverse()
+        x = nn.functional.pad(x, pad, value=torch.finfo(x.dtype).min)
+
+    # Original pre-bucketed indices
+    idxs = torch.empty_like(x, dtype=torch.int64, device=x.device)
+    # NOTE: only works if dim == -1
+    idxs[...] = torch.arange(x.size(dim), dtype=torch.int64)
+
+    # Divide the sequence dimension into buckets
+    if interleaved:
+        x = x.unflatten(dim, sizes=(x.size(dim) // n_buckets, n_buckets)).transpose(
+            dim, dim + 1
+        )
+        idxs = idxs.unflatten(
+            dim, sizes=(idxs.size(dim) // n_buckets, n_buckets)
+        ).transpose(dim, dim + 1)
+    else:
+        x = x.unflatten(dim, sizes=(n_buckets, x.size(dim) // n_buckets))
+        idxs = idxs.unflatten(dim, sizes=(n_buckets, idxs.size(dim) // n_buckets))
+
+    # Get extra element to use if last bucket "overfills"
+    topk_out = torch.topk(x, k=k_per_bucket + 1, dim=dim + 1)
+
+    mask = torch.ones_like(topk_out.values, dtype=torch.bool)
+
+    if interleaved:
+        mask[..., -1] = False
+    else:
+        excess_k = max(0, k_per_bucket - n_excess_els)
+        mask[..., excess_k:, -1] = False
+        mask[..., -1, n_excess_els:] = False
+
+    values = topk_out.values
+    indices = torch.gather(idxs, dim + 1, topk_out.indices)
+    shape = (*x.shape[:-2], k)
+
+    return values[mask].reshape(shape), indices[mask].reshape(shape)
+
+
 class LowRank(nn.Module):
     """Use a random orthonormal projection to down-project Q & K."""
 
@@ -122,6 +182,9 @@ class Settings:
     k: int
     local_k: int
     reallocate_to_mean_value: bool
+    bucket_topk: bool
+    topk_n_buckets: int
+    topk_interleaved: bool
     score: ScoreSettings
 
     def __init__(
@@ -240,9 +303,29 @@ class AnnAttention(nn.Module):
             dim=2, keepdim=True
         )
         # Find max-score keys (note: +1 because the current token's k comes "for free")
-        indices = topk_score.topk(
-            min(self.settings.k + 1, score.shape[-1]), -1
-        ).indices  # (batch, n_kv_heads, 1, 1, k+1)
+        if self.settings.bucket_topk:
+            # Start of the local window (TODO: use causal_index mask)
+            local_idx = topk_score.size(-1) - self.settings.local_k - 1
+            shape = (*topk_score.shape[:-1], self.settings.k + 1)
+            indices = torch.empty(shape, dtype=torch.int64, device=topk_score.device)
+
+            # Non-local top-k indices
+            indices[..., : self.settings.k - self.settings.local_k] = bucket_topk(
+                topk_score[..., :local_idx],
+                self.settings.k - self.settings.local_k,
+                dim=-1,
+                n_buckets=self.settings.topk_n_buckets,
+                interleaved=self.settings.topk_interleaved,
+            )
+
+            # Local indices
+            indices[..., self.settings.k - self.settings.local_k :] = torch.arange(
+                start=local_idx, end=topk_score.size(-1)
+            )
+        else:
+            indices = topk_score.topk(
+                min(self.settings.k + 1, score.shape[-1]), -1
+            ).indices  # (batch, n_kv_heads, 1, 1, k+1)
         if self.debug_indices is not None:
             self.debug_indices.append(indices)
 
