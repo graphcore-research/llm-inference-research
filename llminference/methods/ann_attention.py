@@ -41,7 +41,7 @@ def bucket_topk(
         topk_out = torch.topk(x, k, dim)
         return topk_out.values, topk_out.indices
 
-    # assert x.size(0) == 1, "Batch size > 1 might not work due to padding"
+    assert x.size(0) == 1, "Batch size > 1 might not work due to padding"
     assert k % n_buckets == 0, "k should be divisible by the number of buckets"
     assert dim == -1, "Some parts don't work otherwise"
 
@@ -49,12 +49,12 @@ def bucket_topk(
 
     k_per_bucket = k // n_buckets
 
-    n_excess_els = x.size(dim) % n_buckets
+    n_pad = (n_buckets - x.size(dim) % n_buckets) % n_buckets
 
     # Pad the sequence at the end so it is divisible by n_buckets
-    if n_excess_els != 0:
+    if n_pad != 0:
         pad = [0 for _ in range(x.ndim * 2)]
-        pad[dim * 2] = n_buckets - x.size(dim) % n_buckets
+        pad[dim * 2] = n_pad
         pad.reverse()
         x = nn.functional.pad(x, pad, value=torch.finfo(x.dtype).min)
 
@@ -64,16 +64,17 @@ def bucket_topk(
     idxs[...] = torch.arange(x.size(dim), dtype=torch.int64)
 
     # Divide the sequence dimension into buckets
+    n_els_per_bucket = x.size(dim) // n_buckets
     if interleaved:
-        x = x.unflatten(dim, sizes=(x.size(dim) // n_buckets, n_buckets)).transpose(
+        x = x.unflatten(dim, sizes=(n_els_per_bucket, n_buckets)).transpose(
             dim, dim + 1
         )
-        idxs = idxs.unflatten(
-            dim, sizes=(idxs.size(dim) // n_buckets, n_buckets)
-        ).transpose(dim, dim + 1)
+        idxs = idxs.unflatten(dim, sizes=(n_els_per_bucket, n_buckets)).transpose(
+            dim, dim + 1
+        )
     else:
-        x = x.unflatten(dim, sizes=(n_buckets, x.size(dim) // n_buckets))
-        idxs = idxs.unflatten(dim, sizes=(n_buckets, idxs.size(dim) // n_buckets))
+        x = x.unflatten(dim, sizes=(n_buckets, n_els_per_bucket))
+        idxs = idxs.unflatten(dim, sizes=(n_buckets, n_els_per_bucket))
 
     # Get extra element to use if last bucket "overfills"
     topk_out = torch.topk(x, k=k_per_bucket + 1, dim=dim + 1)
@@ -83,9 +84,9 @@ def bucket_topk(
     if interleaved:
         mask[..., -1] = False
     else:
-        excess_k = max(0, k_per_bucket - n_excess_els)
+        excess_k = max(0, k_per_bucket - (n_els_per_bucket - n_pad))
         mask[..., excess_k:, -1] = False
-        mask[..., -1, n_excess_els:] = False
+        mask[..., -1, -1 - excess_k :] = False
 
     values = topk_out.values
     indices = torch.gather(idxs, dim + 1, topk_out.indices)
@@ -192,6 +193,9 @@ class Settings:
         k: int,
         local_k: int,
         reallocate_to_mean_value: bool,
+        bucket_topk: bool,
+        topk_n_buckets: int,
+        topk_interleaved: bool,
         score: Union[ScoreSettings, str],
         **args: Any,
     ):
@@ -208,6 +212,9 @@ class Settings:
         self.k = k
         self.local_k = local_k
         self.reallocate_to_mean_value = reallocate_to_mean_value
+        self.bucket_topk = bucket_topk
+        self.topk_n_buckets = topk_n_buckets
+        self.topk_interleaved = topk_interleaved
         self.score = score_settings
 
 
@@ -316,7 +323,7 @@ class AnnAttention(nn.Module):
                 dim=-1,
                 n_buckets=self.settings.topk_n_buckets,
                 interleaved=self.settings.topk_interleaved,
-            )
+            )[1]
 
             # Local indices
             indices[..., self.settings.k - self.settings.local_k :] = torch.arange(
