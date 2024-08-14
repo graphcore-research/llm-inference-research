@@ -174,20 +174,20 @@ class Settings:
     k: int
     local_k: int
     reallocate_to_mean_value: bool
-    bucket_topk: bool
-    topk_n_buckets: int
-    topk_interleaved: bool
     score: ScoreSettings
+    bucket_topk: bool = False
+    topk_n_buckets: int = -1
+    topk_interleaved: bool = True
 
     def __init__(
         self,
         k: int,
         local_k: int,
         reallocate_to_mean_value: bool,
-        bucket_topk: bool,
-        topk_n_buckets: int,
-        topk_interleaved: bool,
         score: Union[ScoreSettings, str],
+        bucket_topk: bool = False,
+        topk_n_buckets: int = -1,
+        topk_interleaved: bool = True,
         **args: Any,
     ):
         if isinstance(score, str):
