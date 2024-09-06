@@ -26,64 +26,13 @@ from transformers.models.mistral.modeling_mistral import (
 from .. import utility
 from ..models import gemma_attention, llama_attention, mistral_attention
 from . import sparse_attention
+from approx_topk.torch_default import bucket_topk
 
 
 def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
     """A broadcasting version of torch.gather."""
     dim += (dim < 0) * t.ndim
     return t.gather(dim, i.expand(*t.shape[:dim], i.shape[dim], *t.shape[dim + 1 :]))
-
-
-def bucket_topk(
-    x: torch.Tensor, k: int, dim: int, n_buckets: int, interleaved: bool
-) -> Tuple[Tensor, Tensor]:
-    if n_buckets == 1:
-        topk_out = torch.topk(x, k, dim)
-        return topk_out.values, topk_out.indices
-
-    assert x.size(0) == 1, "Batch size > 1 might not work due to padding"
-    assert k % n_buckets == 0, "k should be divisible by the number of buckets"
-    assert dim == -1, "Assumed dim=-1, some parts don't work otherwise"
-
-    dim = dim % x.ndim
-
-    k_per_bucket = k // n_buckets
-
-    # Pad the sequence at the end so it is divisible by n_buckets
-    pad = [0 for _ in range(x.ndim * 2)]
-    pad[dim * 2] = (n_buckets - x.size(dim) % n_buckets) % n_buckets
-    pad.reverse()
-    x_pad = nn.functional.pad(x, pad, value=torch.finfo(x.dtype).min)
-
-    # Original pre-bucketed indices
-    idxs = torch.empty_like(x_pad, dtype=torch.int64)
-    # NOTE: only works if dim == -1
-    idxs[...] = torch.arange(x_pad.size(dim), dtype=torch.int64)
-
-    # Divide the sequence dimension into buckets
-    if interleaved:
-        x_pad = x_pad.unflatten(dim, sizes=(-1, n_buckets)).transpose(dim, dim + 1)
-        idxs = idxs.unflatten(dim, sizes=(-1, n_buckets)).transpose(dim, dim + 1)
-    else:
-        x_pad = x_pad.unflatten(dim, sizes=(n_buckets, -1))
-        idxs = idxs.unflatten(dim, sizes=(n_buckets, -1))
-
-    # Get extra element per bucket to compensate for padding
-    topk_out = torch.topk(x_pad, k=k_per_bucket + 1, dim=dim + 1)
-    values = topk_out.values
-    indices = torch.gather(idxs, dim + 1, topk_out.indices)
-
-    mask = torch.ones_like(topk_out.values, dtype=torch.bool)
-    mask[..., -1] = False
-
-    shape = (*x.shape[:-1], k)
-
-    pad_mask = indices < x.size(dim)
-    mask &= pad_mask
-    n_excess_els = torch.prod(torch.tensor(shape)) - mask.sum()
-    mask[..., : n_excess_els // torch.prod(torch.tensor(shape[:-1])), -1] = True
-
-    return values[mask].reshape(shape), indices[mask].reshape(shape)
 
 
 class LowRank(nn.Module):
@@ -176,8 +125,9 @@ class Settings:
     reallocate_to_mean_value: bool
     score: ScoreSettings
     bucket_topk: bool = False
-    topk_n_buckets: int = -1
+    topk_k_per_bucket: int = -1
     topk_interleaved: bool = True
+    topk_k_mult: int = 1
 
     def __init__(
         self,
@@ -186,8 +136,9 @@ class Settings:
         reallocate_to_mean_value: bool,
         score: Union[ScoreSettings, str],
         bucket_topk: bool = False,
-        topk_n_buckets: int = -1,
+        topk_k_per_bucket: int = 1,
         topk_interleaved: bool = True,
+        topk_k_mult: int = 1,
         **args: Any,
     ):
         if isinstance(score, str):
@@ -204,8 +155,9 @@ class Settings:
         self.local_k = local_k
         self.reallocate_to_mean_value = reallocate_to_mean_value
         self.bucket_topk = bucket_topk
-        self.topk_n_buckets = topk_n_buckets
+        self.topk_k_per_bucket = topk_k_per_bucket
         self.topk_interleaved = topk_interleaved
+        self.topk_k_mult = topk_k_mult
         self.score = score_settings
 
 
@@ -312,7 +264,8 @@ class AnnAttention(nn.Module):
                 topk_score[..., :local_idx],
                 self.settings.k - self.settings.local_k,
                 dim=-1,
-                n_buckets=self.settings.topk_n_buckets,
+                k_mult=self.settings.topk_k_mult,
+                k_per_bucket=self.settings.topk_k_per_bucket,
                 interleaved=self.settings.topk_interleaved,
             )[1]
 
