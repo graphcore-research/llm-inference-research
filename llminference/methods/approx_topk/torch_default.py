@@ -3,7 +3,7 @@ as well as the reference bucketed top-k implementation using torch.topk
 """
 
 import torch
-from approx_topk.autobucket import bucket
+from .autobucket import bucket
 from torch import Tensor
 
 

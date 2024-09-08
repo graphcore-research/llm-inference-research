@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 from torch.nn.functional import pad
 
-from approx_topk import TopK
+from . import TopK
 
 
 def bucket(

@@ -26,7 +26,7 @@ from transformers.models.mistral.modeling_mistral import (
 from .. import utility
 from ..models import gemma_attention, llama_attention, mistral_attention
 from . import sparse_attention
-from approx_topk.torch_default import bucket_topk
+from .approx_topk.torch_default import bucket_topk
 
 
 def gather(t: Tensor, dim: int, i: Tensor) -> Tensor:
